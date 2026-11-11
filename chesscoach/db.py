@@ -160,17 +160,42 @@ def save_games(conn: sqlite3.Connection, games: Iterable[GameRecord]) -> int:
 
 
 def pending_games(conn: sqlite3.Connection, time_controls: list[str],
-                  include_errors: bool = False, limit: Optional[int] = None) -> list[sqlite3.Row]:
+                  include_errors: bool = False, limit: Optional[int] = None,
+                  date_from: Optional[str] = None, date_to: Optional[str] = None) -> list[sqlite3.Row]:
     """Games still to analyze, newest first. Daily games are never returned."""
     tcs = [t for t in time_controls if t != "daily"]
     if not tcs:
         return []
     statuses = ["pending", "error"] if include_errors else ["pending"]
     sql = (f"SELECT id, pgn, my_color FROM games WHERE tc_class IN ({','.join('?' * len(tcs))}) "
-           f"AND analysis_status IN ({','.join('?' * len(statuses))}) ORDER BY date DESC, id")
+           f"AND analysis_status IN ({','.join('?' * len(statuses))})")
+    params: list = tcs + statuses
+    if date_from:
+        sql += " AND date >= ?"
+        params.append(str(date_from))
+    if date_to:
+        sql += " AND date <= ?"
+        params.append(str(date_to))
+    sql += " ORDER BY date DESC, id"
     if limit:
         sql += f" LIMIT {int(limit)}"
-    return conn.execute(sql, tcs + statuses).fetchall()
+    return conn.execute(sql, params).fetchall()
+
+
+def delete_games_outside(conn: sqlite3.Connection, date_from: str, date_to: str,
+                         time_classes: Iterable[str], dry_run: bool = False) -> int:
+    """Delete stored games (with their moves, analysis, leaks, cards) that are
+    outside the date range or not in `time_classes`. Returns the number affected."""
+    tcs = list(time_classes)
+    where = (f"NOT (COALESCE(date, '') BETWEEN ? AND ? AND tc_class IN ({','.join('?' * len(tcs)) or 'NULL'}))")
+    params = [str(date_from), str(date_to), *tcs]
+    count = conn.execute(f"SELECT COUNT(*) FROM games WHERE {where}", params).fetchone()[0]
+    if not dry_run and count:
+        with conn:
+            for table in ("leaks", "srs_cards", "calibration_labels", "analysis", "moves"):
+                conn.execute(f"DELETE FROM {table} WHERE game_id IN (SELECT id FROM games WHERE {where})", params)
+            conn.execute(f"DELETE FROM games WHERE {where}", params)
+    return count
 
 
 # --- analysis -----------------------------------------------------------------

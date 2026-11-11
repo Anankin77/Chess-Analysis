@@ -135,7 +135,7 @@ def game_to_record(game: chess.pgn.Game, usernames: set[str]) -> GameRecord:
             fen_before=board.fen(), clock_seconds=parse_clock(node.comment)))
         board.push(move)
     if not moves:
-        raise ValueError("game has no moves")
+        raise NoMoves("game has no moves")
 
     gid, source, url = game_id_for(h, [m.uci for m in moves])
     tc = h.get("TimeControl", "")
@@ -168,6 +168,10 @@ def game_to_record(game: chess.pgn.Game, usernames: set[str]) -> GameRecord:
         pgn=game.accept(exporter), moves=moves)
 
 
+class NoMoves(ValueError):
+    """Aborted game: nothing to analyze. Counted, not reported as a problem."""
+
+
 def iter_pgn_games(text: str) -> Iterator[chess.pgn.Game]:
     stream = io.StringIO(text)
     while True:
@@ -183,10 +187,11 @@ def iter_pgn_games(text: str) -> Iterator[chess.pgn.Game]:
 
 class ImportStats:
     def __init__(self) -> None:
-        self.imported = self.existing = self.skipped = 0
+        self.imported = self.existing = self.skipped = self.aborted = self.filtered = 0
 
     def __repr__(self) -> str:
-        return f"imported={self.imported} already_present={self.existing} skipped={self.skipped}"
+        return (f"imported={self.imported} already_present={self.existing} "
+                f"outside_selection={self.filtered} aborted_no_moves={self.aborted} skipped={self.skipped}")
 
 
 def import_pgn_text(conn: sqlite3.Connection, text: str, usernames: Optional[set[str]] = None,
@@ -199,6 +204,9 @@ def import_pgn_text(conn: sqlite3.Connection, text: str, usernames: Optional[set
     for game in iter_pgn_games(text):
         try:
             rec = game_to_record(game, usernames)
+        except NoMoves:
+            stats.aborted += 1
+            continue
         except Exception as exc:
             stats.skipped += 1
             log.warning("Skipping game %s: %s", game.headers.get("Link") or game.headers.get("Site", "?"), exc)
@@ -220,27 +228,35 @@ def _session() -> requests.Session:
     return s
 
 
-def import_chesscom(conn: sqlite3.Connection, username: Optional[str] = None, full: bool = False,
+def import_chesscom(conn: sqlite3.Connection, username: Optional[str] = None,
+                    date_from: Optional[str] = None, date_to: Optional[str] = None,
+                    time_classes: Optional[Iterable[str]] = None,
                     session: Optional[requests.Session] = None,
-                    progress: Callable[[str], None] = lambda msg: None) -> ImportStats:
-    """Incremental import from the public monthly archives. Months older than the
-    newest Chess.com game already stored are not re-downloaded unless `full`."""
+                    progress: Callable[[str, float], None] = lambda msg, fraction: None) -> ImportStats:
+    """Import from the public monthly archives.
+
+    `date_from` / `date_to` are ISO dates (inclusive, UTC); `time_classes` limits
+    the import to e.g. {"rapid", "blitz"}. None means no restriction. Games
+    already stored are skipped before their PGN is even parsed, so re-running
+    is cheap."""
     username = (username or config.CHESSCOM_USERNAME).strip()
     session = session or _session()
     stats = ImportStats()
+    wanted = set(time_classes) if time_classes else None
+    date_from, date_to = (str(date_from) if date_from else None), (str(date_to) if date_to else None)
     resp = session.get(f"https://api.chess.com/pub/player/{username.lower()}/games/archives",
                        timeout=config.HTTP_TIMEOUT)
     resp.raise_for_status()
-    archives = resp.json().get("archives", [])
-    latest = conn.execute("SELECT MAX(date) FROM games WHERE source='chesscom'").fetchone()[0]
-    latest_month = latest[:7].replace("-", "/") if latest and not full else ""
+    archives = []
+    for url in resp.json().get("archives", []):
+        month = "-".join(url.rstrip("/").split("/")[-2:])  # yyyy-mm
+        if (date_from and month < date_from[:7]) or (date_to and month > date_to[:7]):
+            continue
+        archives.append((month, url))
     known = db.existing_game_ids(conn)
     usernames = my_usernames([username])
-    for url in archives:
-        month = "/".join(url.rstrip("/").split("/")[-2:])  # yyyy/mm
-        if month < latest_month:
-            continue
-        progress(f"Chess.com {month}")
+    for i, (month, url) in enumerate(archives):
+        progress(f"Chess.com {month}", i / len(archives))
         try:
             r = session.get(url, timeout=config.HTTP_TIMEOUT)
             r.raise_for_status()
@@ -248,8 +264,25 @@ def import_chesscom(conn: sqlite3.Connection, username: Optional[str] = None, fu
         except (requests.RequestException, ValueError) as exc:
             log.warning("Skipping Chess.com archive %s: %s", url, exc)
             continue
-        pgns = [g["pgn"] for g in games if g.get("pgn") and g.get("rules", "chess") == "chess"]
+        pgns = []
+        for g in games:
+            if not g.get("pgn") or g.get("rules", "chess") != "chess":
+                continue
+            m = CHESSCOM_URL_RE.search(g.get("url", ""))
+            if m and f"chesscom:{m.group(1)}:{m.group(2)}" in known:
+                stats.existing += 1
+                continue
+            if wanted is not None and classify_time_control(g.get("time_control")) not in wanted:
+                stats.filtered += 1
+                continue
+            if g.get("end_time") and (date_from or date_to):
+                day = time.strftime("%Y-%m-%d", time.gmtime(g["end_time"]))
+                if (date_from and day < date_from) or (date_to and day > date_to):
+                    stats.filtered += 1
+                    continue
+            pgns.append(g["pgn"])
         import_pgn_text(conn, "\n\n".join(pgns), usernames, stats, known)
+    progress("Chess.com done", 1.0)
     return stats
 
 
@@ -275,7 +308,7 @@ def lichess_get(session: requests.Session, url: str, params: dict,
 
 def import_lichess(conn: sqlite3.Connection, username: Optional[str] = None, full: bool = False,
                    session: Optional[requests.Session] = None,
-                   progress: Callable[[str], None] = lambda msg: None) -> ImportStats:
+                   progress: Callable[[str, float], None] = lambda msg, fraction: None) -> ImportStats:
     username = (username or config.LICHESS_USERNAME).strip()
     if not username:
         raise ValueError("No Lichess username configured (config.LICHESS_USERNAME).")
@@ -284,7 +317,7 @@ def import_lichess(conn: sqlite3.Connection, username: Optional[str] = None, ful
     latest = conn.execute("SELECT MAX(date) FROM games WHERE source='lichess'").fetchone()[0]
     if latest and not full:  # re-fetch from the start of the newest stored day; duplicates are skipped
         params["since"] = int(time.mktime(time.strptime(latest, "%Y-%m-%d")) * 1000) - 86_400_000
-    progress(f"Lichess {username}")
+    progress(f"Lichess {username}", 0.0)
     resp = lichess_get(session, f"https://lichess.org/api/games/user/{username}", params)
     resp.encoding = "utf-8"
     return import_pgn_text(conn, resp.text, my_usernames([username]))
@@ -304,16 +337,21 @@ def main(argv: Optional[list[str]] = None) -> None:
     p.add_argument("--chesscom", nargs="?", const=config.CHESSCOM_USERNAME, metavar="USER")
     p.add_argument("--lichess", nargs="?", const=config.LICHESS_USERNAME, metavar="USER")
     p.add_argument("--pgn", nargs="*", default=[], metavar="FILE")
-    p.add_argument("--full", action="store_true", help="re-download everything (existing games are still skipped)")
+    p.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="Chess.com: only games from this date")
+    p.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Chess.com: only games up to this date")
+    p.add_argument("--time-controls", nargs="+", choices=["bullet", "blitz", "rapid", "daily"],
+                   help="Chess.com: only these time formats (default: all)")
+    p.add_argument("--full", action="store_true", help="Lichess: re-download everything")
     args = p.parse_args(argv)
     if not (args.chesscom or args.lichess or args.pgn):
         p.error("nothing to do: pass --chesscom, --lichess and/or --pgn FILE")
     setup_logging()
     conn = db.connect()
     if args.chesscom:
-        print("Chess.com:", import_chesscom(conn, args.chesscom, args.full, progress=print))
+        print("Chess.com:", import_chesscom(conn, args.chesscom, args.date_from, args.date_to, args.time_controls,
+                                            progress=lambda msg, fraction: print(msg)))
     if args.lichess is not None and (args.lichess or config.LICHESS_USERNAME):
-        print("Lichess:", import_lichess(conn, args.lichess, args.full, progress=print))
+        print("Lichess:", import_lichess(conn, args.lichess, args.full))
     for path in args.pgn:
         with open(path, encoding="utf-8", errors="replace") as fh:
             print(f"{path}:", import_pgn_text(conn, fh.read(), my_usernames(

@@ -9,9 +9,9 @@ Finds two decision leaks in your own games and drills them with spaced repetitio
 
 1. Install Python 3.10+ and Stockfish (below).
 2. `pip install -r requirements.txt`
-3. Import games: `python -m chesscoach.importer --chesscom --lichess YOUR_LICHESS_NAME`
-4. Analyze overnight: `python -m chesscoach.engine --batch --workers 4`
-5. Open the app: `streamlit run app.py`
+3. Open the app: `streamlit run app.py`
+4. Import page: choose dates and time formats, press **Import games**
+5. Analyze overnight: `python -m chesscoach.engine --batch --workers 4`
 
 ## 1. Install
 
@@ -71,22 +71,31 @@ Everything tunable is in `chesscoach/config.py`. Identity can also come from env
 
 ## 3. Import games
 
+Open the app (`streamlit run app.py`) and go to **Import**:
+
+1. Pick **From** / **To** dates and the **time formats** (bullet, blitz, rapid, daily).
+2. Press **Import games**.
+
+Games already stored are never downloaded twice, so you can widen the selection later. The same page
+can remove stored games that fall outside the selection, and prints the matching analysis command.
+
+Command-line equivalent:
+
 ```bash
-python -m chesscoach.importer --chesscom --lichess YOUR_LICHESS_NAME
+python -m chesscoach.importer --chesscom --from 2026-01-01 --to 2026-11-11 --time-controls rapid blitz
 ```
 
 ```bash
 python -m chesscoach.importer --pgn my_games.pgn
 ```
 
-Or use the **Import** page of the app (same functions, plus PGN upload).
-
-- Incremental: existing game IDs are skipped; re-running only fetches new months / newer games.
-- Your colour is taken from the configured usernames; games where none of them plays are skipped.
-- Every game is classified from its `TimeControl`: bullet (base < 3 min), blitz, rapid, daily.
-  All are stored. Only `ANALYZE_TIME_CONTROLS` (`rapid`, `blitz`) are analyzed; add `"bullet"` in
-  `config.py` to include it. Daily games are never analyzed.
-- Corrupt PGNs and variants are logged to `data/chesscoach.log` and skipped.
+- Your colour is taken from the configured username; games where it does not play are skipped.
+- Time format comes from `TimeControl`: bullet (base < 3 min), blitz, rapid, daily. Only
+  `ANALYZE_TIME_CONTROLS` (`rapid`, `blitz`) are analyzed; add `"bullet"` in `config.py` to include
+  it. Daily games are never analyzed.
+- Aborted games with no moves are counted and ignored. Corrupt PGNs and variants are logged to
+  `data/chesscoach.log` and skipped.
+- A Lichess importer exists for the command line only (`--lichess NAME`).
 
 ## 4. Overnight batch
 
@@ -95,7 +104,8 @@ python -m chesscoach.engine --batch --workers 4
 ```
 
 - Resumable: stop with Ctrl-C at any time, run the same command again to continue.
-- Newest games first. Useful flags: `--limit 200`, `--time-controls rapid`, `--retry-errors`.
+- Newest games first. Useful flags: `--since 2026-01-01`, `--until 2026-11-11`, `--time-controls rapid`,
+  `--limit 200`, `--retry-errors`.
 - Use one worker per physical core. Rough speed: about 1 s per analyzed move per worker at depth 16,
   so around 10 s per game with 4 workers (1000 games ≈ 3 hours).
 - Workers never touch SQLite; the main process commits results in batches.
@@ -116,7 +126,7 @@ streamlit run app.py
 | Trainer | Your leak positions as SM-2 cards. Move on the board, see the engine's lines, grade Again / Hard / Good / Easy. |
 | Find the quiet move | Same drill, forcing-bias positions only. |
 | Calibration | Judge 20 random flagged positions as Valid / False positive; precision per leak type shows which threshold to tune. |
-| Import | Fetch from Chess.com / Lichess, upload PGN, see what is waiting for analysis. |
+| Import | Fetch from Chess.com by date range and time format, remove unwanted games, upload PGN. |
 
 ## 6. Tuning loop
 

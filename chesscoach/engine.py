@@ -190,7 +190,8 @@ def _work(job: tuple[str, str, str]) -> GameAnalysisResult:
 # --- batch runner (main process: the only SQLite writer) --------------------------------
 
 def run_batch(workers: int, limit: Optional[int] = None, time_controls: Optional[list[str]] = None,
-              retry_errors: bool = False, settings: EngineSettings = EngineSettings()) -> int:
+              retry_errors: bool = False, settings: EngineSettings = EngineSettings(),
+              date_from: Optional[str] = None, date_to: Optional[str] = None) -> int:
     from rich.progress import (BarColumn, MofNCompleteColumn, Progress, TextColumn,
                                TimeElapsedColumn, TimeRemainingColumn)
 
@@ -198,7 +199,8 @@ def run_batch(workers: int, limit: Optional[int] = None, time_controls: Optional
 
     config.stockfish_path()  # fail fast with a helpful message
     conn = db.connect()
-    games = db.pending_games(conn, time_controls or config.ANALYZE_TIME_CONTROLS, retry_errors, limit)
+    games = db.pending_games(conn, time_controls or config.ANALYZE_TIME_CONTROLS, retry_errors, limit,
+                             date_from, date_to)
     if not games:
         print("Nothing to analyze: no pending games in", time_controls or config.ANALYZE_TIME_CONTROLS)
         return 0
@@ -262,6 +264,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     p.add_argument("--limit", type=int, help="analyze at most N games (newest first)")
     p.add_argument("--time-controls", nargs="+", choices=["bullet", "blitz", "rapid"],
                    help=f"default: {config.ANALYZE_TIME_CONTROLS}")
+    p.add_argument("--since", metavar="YYYY-MM-DD", help="only games played on or after this date")
+    p.add_argument("--until", metavar="YYYY-MM-DD", help="only games played on or before this date")
     p.add_argument("--retry-errors", action="store_true", help="also retry games that failed before")
     p.add_argument("--depth", type=int, default=config.DEFAULT_DEPTH)
     args = p.parse_args(argv)
@@ -270,7 +274,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     from .importer import setup_logging
     setup_logging()
     run_batch(args.workers, args.limit, args.time_controls, args.retry_errors,
-              EngineSettings(depth=args.depth))
+              EngineSettings(depth=args.depth), args.since, args.until)
 
 
 if __name__ == "__main__":

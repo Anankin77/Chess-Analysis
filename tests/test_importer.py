@@ -158,3 +158,68 @@ def test_chesscom_import_sends_user_agent_and_skips_variants():
     assert stats.imported == 1
     assert s.headers["User-Agent"].startswith("chess-coach/1.0")
     assert importer._session().headers["User-Agent"].startswith("chess-coach/1.0")
+
+
+def _chesscom_session(archives):
+    """archives: {"2024/03": [game dict, ...]}"""
+    class Session:
+        headers = {}
+        fetched = []
+
+        def get(self, url, **k):
+            if url.endswith("/archives"):
+                return FakeResp(200, payload={"archives": [f"https://api.chess.com/pub/player/x/games/{m}" for m in archives]})
+            month = "/".join(url.split("/")[-2:])
+            self.fetched.append(month)
+            return FakeResp(200, payload={"games": archives[month]})
+    return Session()
+
+
+def _game(game_id, tc, end_time, date):
+    pgn = (GOOD_PGN.replace("123456", str(game_id)).replace('"600+5"', f'"{tc}"')
+           .replace("2024.03.01", date))
+    return {"pgn": pgn, "rules": "chess", "url": f"https://www.chess.com/game/live/{game_id}",
+            "time_control": tc, "end_time": end_time}
+
+
+def test_chesscom_import_filters_by_date_and_time_format():
+    import calendar
+    ts = lambda y, m, d: calendar.timegm((y, m, d, 12, 0, 0))
+    archives = {
+        "2023/12": [_game(1, "600", ts(2023, 12, 20), "2023.12.20")],
+        "2024/03": [_game(2, "600", ts(2024, 3, 5), "2024.03.05"),      # rapid, in range
+                    _game(3, "60", ts(2024, 3, 6), "2024.03.06"),       # bullet: wrong format
+                    _game(4, "180+2", ts(2024, 3, 25), "2024.03.25")],  # blitz, after date_to
+        "2024/05": [_game(5, "600", ts(2024, 5, 1), "2024.05.01")],
+    }
+    conn = db.connect(":memory:")
+    s = _chesscom_session(archives)
+    stats = importer.import_chesscom(conn, "who_carezz", "2024-03-01", "2024-03-20", ["rapid", "blitz"], session=s)
+    assert s.fetched == ["2024/03"]                       # other months are not even downloaded
+    assert (stats.imported, stats.filtered) == (1, 2)
+    assert [r[0] for r in conn.execute("SELECT id FROM games")] == ["chesscom:live:2"]
+
+    # Widening the selection later only adds the missing games.
+    s = _chesscom_session(archives)
+    stats = importer.import_chesscom(conn, "who_carezz", session=s)
+    assert (stats.imported, stats.existing) == (4, 1)
+
+
+def test_aborted_games_are_counted_not_warned(caplog):
+    conn = db.connect(":memory:")
+    empty = GOOD_PGN.split("\n\n")[0] + "\n\n1-0\n"
+    stats = importer.import_pgn_text(conn, empty, {"who_carezz"})
+    assert (stats.imported, stats.aborted, stats.skipped) == (0, 1, 0)
+    assert "Skipping" not in caplog.text
+
+
+def test_delete_games_outside_selection():
+    conn = db.connect(":memory:")
+    importer.import_pgn_text(conn, GOOD_PGN + "\n\n" + BLACK_DAILY_PGN, {"who_carezz"})
+    assert db.delete_games_outside(conn, "2024-01-01", "2024-12-31", ["rapid"], dry_run=True) == 1
+    assert conn.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 2
+    assert db.delete_games_outside(conn, "2024-01-01", "2024-12-31", ["rapid"]) == 1
+    assert [r[0] for r in conn.execute("SELECT id FROM games")] == ["chesscom:live:123456"]
+    assert conn.execute("SELECT COUNT(*) FROM moves WHERE game_id LIKE '%daily%'").fetchone()[0] == 0
+    assert db.pending_games(conn, ["rapid"], date_from="2024-03-02") == []
+    assert len(db.pending_games(conn, ["rapid"], date_from="2024-03-01", date_to="2024-03-01")) == 1

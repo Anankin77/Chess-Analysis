@@ -1,11 +1,11 @@
-# Wooden theme, matching the board colours.
+# Dark walnut theme (the wood grain itself is CSS in app.py).
 [theme]
-base = "light"
-primaryColor = "#8b5a2b"
-backgroundColor = "#f5ead6"
-secondaryBackgroundColor = "#e6d3b1"
-textColor = "#3b2a1a"
-font = "serif"
+base = "dark"
+primaryColor = "#81b64c"
+backgroundColor = "#3a2617"
+secondaryBackgroundColor = "#2a1b10"
+textColor = "#f3e9d8"
+font = "sans serif"
 
 [browser]
 gatherUsageStats = false

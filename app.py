@@ -19,7 +19,35 @@ st.set_page_config(page_title="chess-coach", page_icon="♟", layout="wide")
 _board_component = components.declare_component(
     "chesscoach_board", path=str(Path(__file__).parent / "chesscoach" / "board_component"))
 
-RED, GREEN = "#c62828cc", "#2e7d32cc"
+RED, GREEN = "#d93a3add", "#81b64cee"
+BOARD_COLORS = {"square light": "#e8cfa6", "square dark": "#a5713f", "margin": "#2a1b10", "coord": "#e8cfa6",
+                "square light lastmove": "#e8cfa6", "square dark lastmove": "#a5713f"}
+TIME_FORMATS = ["bullet", "blitz", "rapid", "daily"]
+
+# Walnut table: layered gradients give a wood grain without shipping an image.
+st.markdown("""
+<style>
+.stApp {
+  background-color: #3a2617;
+  background-image:
+    repeating-linear-gradient(91deg, rgba(0,0,0,.13) 0 2px, transparent 2px 11px),
+    repeating-linear-gradient(89deg, rgba(255,214,160,.035) 0 1px, transparent 1px 27px),
+    repeating-linear-gradient(90.5deg, rgba(0,0,0,.07) 0 6px, transparent 6px 61px),
+    linear-gradient(90deg, #3b2616 0%, #4a2f1b 22%, #38230f 47%, #4c311d 71%, #3a2415 100%);
+  background-attachment: fixed;
+}
+[data-testid="stHeader"] { background: transparent; }
+[data-testid="stSidebar"] { background: rgba(24, 15, 8, .82); border-right: 1px solid rgba(0,0,0,.35); }
+[data-testid="stSidebar"] blockquote { border-left: 3px solid #81b64c; color: #d9c7a8; }
+h1, h2, h3 { color: #fff4e0; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+[data-testid="stMetric"], [data-testid="stExpander"], [data-testid="stDataFrame"] {
+  background: rgba(24, 15, 8, .55); border-radius: 8px;
+}
+[data-testid="stMetric"] { padding: 10px 14px; }
+.stButton > button { font-weight: 700; border-radius: 6px; box-shadow: 0 2px 0 rgba(0,0,0,.35); }
+[data-testid="stImage"] img { border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+</style>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -49,7 +77,7 @@ def board_svg(fen: str, my_move: str | None = None, best_move: str | None = None
     if best_move:
         m = chess.Move.from_uci(best_move)
         arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color=GREEN))
-    return chess.svg.board(board, arrows=arrows, orientation=board.turn, size=size)
+    return chess.svg.board(board, arrows=arrows, orientation=board.turn, size=size, colors=BOARD_COLORS)
 
 
 def san(fen: str, uci: str) -> str:
@@ -355,51 +383,75 @@ def page_import() -> None:
     st.title("Import")
     counts = db.status_counts(conn)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Games", counts["games"])
+    c1.metric("Games stored", counts["games"])
     c2.metric("Analyzed", counts["by_status"].get("done", 0))
     pending = conn.execute(
         f"SELECT COUNT(*) FROM games WHERE analysis_status='pending' AND tc_class IN "
         f"({','.join('?' * len(config.ANALYZE_TIME_CONTROLS))})", config.ANALYZE_TIME_CONTROLS).fetchone()[0]
     c3.metric("Waiting for analysis", pending)
     c4.metric("Leaks found", counts["leaks"])
-    if counts["by_tc"]:
-        st.caption("By time control: " + ", ".join(f"{k} {v}" for k, v in sorted(counts["by_tc"].items()))
-                   + f". Analyzed by default: {', '.join(config.ANALYZE_TIME_CONTROLS)} (daily never).")
 
     st.subheader("Chess.com")
-    cc_user = st.text_input("Chess.com username", config.CHESSCOM_USERNAME)
-    if st.button("Fetch new Chess.com games", disabled=not cc_user.strip()):
-        with st.status("Downloading monthly archives…") as status:
-            try:
-                stats = importer.import_chesscom(conn, cc_user, progress=status.write)
-                status.update(label=f"Chess.com: {stats}", state="complete")
-            except Exception as exc:
-                status.update(label=f"Chess.com import failed: {exc}", state="error")
+    newest = conn.execute("SELECT MAX(date) FROM games WHERE COALESCE(date, '') != ''").fetchone()[0]
+    today = date.today()
+    default_from = date.fromisoformat(newest) if newest else today.replace(year=today.year - 1)
+    u, f, t = st.columns([2, 1, 1])
+    user = u.text_input("Username", config.CHESSCOM_USERNAME)
+    d_from = f.date_input("From", default_from, min_value=date(2007, 1, 1), max_value=today)
+    d_to = t.date_input("To", today, min_value=date(2007, 1, 1), max_value=today)
+    formats = st.multiselect("Time formats", TIME_FORMATS, default=list(config.ANALYZE_TIME_CONTROLS),
+                             help="bullet: base under 3 min · blitz: under 10 min · rapid: 10 min and more · "
+                                  "daily is stored but never analyzed")
+    ready = bool(user.strip()) and bool(formats) and d_from <= d_to
+    if d_from > d_to:
+        st.warning("'From' is after 'To'.")
+    if st.button("Import games", type="primary", disabled=not ready):
+        bar = st.progress(0.0, text="Contacting Chess.com…")
+        try:
+            stats = importer.import_chesscom(conn, user, d_from.isoformat(), d_to.isoformat(), formats,
+                                             progress=lambda msg, frac: bar.progress(min(frac, 1.0), text=msg))
+            bar.empty()
+            st.success(f"Imported {stats.imported} new games. Already stored: {stats.existing} · "
+                       f"outside your selection: {stats.filtered} · aborted with no moves: {stats.aborted} · "
+                       f"unreadable or variants: {stats.skipped}")
+        except Exception as exc:
+            bar.empty()
+            st.error(f"Chess.com import failed: {exc}")
+    st.caption("Games already stored are never downloaded twice, so you can widen the dates or formats later.")
 
-    st.subheader("Lichess")
-    li_user = st.text_input("Lichess username", config.LICHESS_USERNAME,
-                            help="Default comes from CHESSCOACH_LICHESS_USERNAME or config.py")
-    if st.button("Fetch new Lichess games", disabled=not li_user.strip()):
-        with st.status("Downloading from Lichess (waits and retries on rate limits)…") as status:
-            try:
-                stats = importer.import_lichess(conn, li_user, progress=status.write)
-                status.update(label=f"Lichess: {stats}", state="complete")
-            except Exception as exc:
-                status.update(label=f"Lichess import failed: {exc}", state="error")
+    stored = pd.read_sql_query(
+        """SELECT tc_class AS "Time format", COUNT(*) AS Games, MIN(NULLIF(date, '')) AS "First", MAX(date) AS "Last",
+                  SUM(analysis_status = 'done') AS Analyzed
+           FROM games GROUP BY tc_class ORDER BY Games DESC""", conn)
+    if not stored.empty:
+        st.subheader("Stored games")
+        st.dataframe(stored, hide_index=True, use_container_width=True)
 
-    st.subheader("PGN upload")
-    files = st.file_uploader("PGN files", type=["pgn"], accept_multiple_files=True)
-    if files and st.button("Import PGN"):
-        names = importer.my_usernames([cc_user, li_user])
-        for f in files:
-            stats = importer.import_pgn_text(conn, f.getvalue().decode("utf-8", errors="replace"), names)
-            st.write(f"{f.name}: {stats}")
-        st.caption("Skipped games (corrupt, variants, or none of your usernames playing) are listed in "
-                   f"`{config.LOG_PATH}`.")
+        with st.expander("Remove games outside the selection above"):
+            n = db.delete_games_outside(conn, d_from.isoformat(), d_to.isoformat(), formats, dry_run=True)
+            st.write(f"**{n}** stored games are outside {d_from} … {d_to} / {', '.join(formats) or 'no format'}. "
+                     "Removing them also deletes their analysis, leaks and cards.")
+            sure = st.checkbox("Yes, delete them permanently", key="confirm_delete")
+            if st.button("Remove", disabled=not (sure and n and ready)):
+                removed = db.delete_games_outside(conn, d_from.isoformat(), d_to.isoformat(), formats)
+                st.session_state.pop("confirm_delete", None)
+                st.toast(f"Removed {removed} games")
+                st.rerun()
+
+    with st.expander("Upload a PGN file instead"):
+        files = st.file_uploader("PGN files", type=["pgn"], accept_multiple_files=True)
+        if files and st.button("Import PGN"):
+            names = importer.my_usernames([user])
+            for file in files:
+                stats = importer.import_pgn_text(conn, file.getvalue().decode("utf-8", errors="replace"), names)
+                st.write(f"{file.name}: {stats}")
 
     st.subheader("Analyze")
-    st.write("Analysis runs outside the app. Start it in a terminal (it resumes where it stopped):")
-    batch_hint()
+    st.write("Analysis runs in a terminal and resumes where it stopped. For the selection above:")
+    analyzable = [x for x in formats if x != "daily"]
+    st.code("python -m chesscoach.engine --batch --workers 4 "
+            f"--since {d_from} --until {d_to} --time-controls {' '.join(analyzable) or 'rapid blitz'}",
+            language="bash")
 
 
 st.navigation([

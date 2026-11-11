@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <style>
-  :root { --text: #222; --muted: #666; --ok: #2e7d32; --bad: #c62828; --panel: rgba(127,127,127,.12); }
+  :root { --text: #222; --muted: #666; --ok: #81b64c; --bad: #e0564a; --panel: rgba(24,15,8,.55); }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: "Source Sans Pro", system-ui, sans-serif; color: var(--text); background: transparent; }
-  #wrap { max-width: 480px; }
+  #wrap { max-width: 480px; padding: 0 8px 8px 0; }
   #board { position: relative; width: 100%; aspect-ratio: 1; display: grid; grid-template-columns: repeat(8, 1fr);
-           grid-template-rows: repeat(8, 1fr); border-radius: 4px; overflow: hidden; user-select: none; touch-action: none; }
+           grid-template-rows: repeat(8, 1fr); border-radius: 4px; overflow: hidden; user-select: none; touch-action: none; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
   .sq { position: relative; }
-  .sq.light { background: #f0d9b5; } .sq.dark { background: #b58863; }
+  .sq.light { background: #e8cfa6; } .sq.dark { background: #a5713f; }
   .sq.sel { box-shadow: inset 0 0 0 4px rgba(20,85,30,.75); }
   .sq.last { background-image: linear-gradient(rgba(155,199,0,.41), rgba(155,199,0,.41)); }
   .sq.target::after { content: ""; position: absolute; left: 36%; top: 36%; width: 28%; height: 28%; border-radius: 50%;
@@ -19,7 +19,7 @@
   .sq svg { width: 100%; height: 100%; display: block; pointer-events: none; }
   .coord { position: absolute; font-size: 10px; font-weight: 700; opacity: .9; pointer-events: none; }
   .coord.file { right: 3px; bottom: 1px; } .coord.rank { left: 3px; top: 1px; }
-  .light .coord { color: #b58863; } .dark .coord { color: #f0d9b5; }
+  .light .coord { color: #a5713f; } .dark .coord { color: #e8cfa6; }
   #arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #ghost { position: fixed; pointer-events: none; display: none; z-index: 10; }
   #ghost svg { width: 100%; height: 100%; }
@@ -34,7 +34,7 @@
   #reveal .win { min-width: 52px; font-variant-numeric: tabular-nums; }
   #reveal .pv { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #reveal .tag { font-size: 12px; padding: 0 6px; border-radius: 8px; color: #fff; white-space: nowrap; flex-shrink: 0; }
-  .tag.ok { background: var(--ok); } .tag.bad { background: var(--bad); }
+  .tag.ok { background: #5d8a34; } .tag.bad { background: #b23a30; }
   #reveal hr { border: 0; border-top: 1px solid rgba(127,127,127,.35); margin: 6px 0; }
 </style>
 </head>
@@ -144,8 +144,8 @@ function reveal(uci) {
           `<span class="tag bad">played in the game</span><span class="pv">${esc(A.played.pv)}</span></div>`;
   revealEl.innerHTML = html;
   revealEl.style.display = "block";
-  let arrows = arrow(A.played.uci, "#c62828", .13);
-  A.lines.filter((l) => l.ok).forEach((l, i) => { arrows += arrow(l.uci, "#2e7d32", i === 0 ? .2 : .13); });
+  let arrows = arrow(A.played.uci, "#d93a3a", .13);
+  A.lines.filter((l) => l.ok).forEach((l, i) => { arrows += arrow(l.uci, "#81b64c", i === 0 ? .2 : .13); });
   arrowsEl.innerHTML = arrows;
   return correct;
 }

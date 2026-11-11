@@ -14,6 +14,7 @@ import io
 import logging
 import math
 import os
+import signal
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Optional
@@ -158,10 +159,19 @@ def _close_engine() -> None:
         _ENGINE = None
 
 
+def _terminate_worker(signum, frame) -> None:
+    _close_engine()
+    os._exit(0)
+
+
 def _init_worker(settings: EngineSettings) -> None:
     global _SETTINGS
     _SETTINGS = settings
     atexit.register(_close_engine)
+    # Ctrl-C is handled by the main process, which saves finished games and
+    # then terminates the workers.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _terminate_worker)
 
 
 def _work(job: tuple[str, str, str]) -> GameAnalysisResult:
@@ -234,7 +244,12 @@ def run_batch(workers: int, limit: Optional[int] = None, time_controls: Optional
         print("\nInterrupted: saving finished games. Re-run the same command to resume.")
     finally:
         flush()
-        pool.shutdown(wait=False, cancel_futures=True)
+        # Every finished result is saved. Terminate the workers instead of joining
+        # them: each holds an engine thread that would keep the process alive.
+        # Interrupted in-flight games stay 'pending' for the next run.
+        for proc in list((getattr(pool, "_processes", None) or {}).values()):
+            proc.terminate()
+        pool.shutdown(wait=True, cancel_futures=True)
     print(f"Analyzed {done_count - errors} games ({errors} errors). {len(games) - done_count} left.")
     return done_count
 

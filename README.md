@@ -120,13 +120,15 @@ hash table is cleared between searches so the shallow search is honestly shallow
 streamlit run app.py
 ```
 
+A step bar on top of every page follows the workflow: **Import → Analyze → Report → Train**.
+
 | Page | What it does |
 |---|---|
-| Leak report | Top 3 patterns with example boards; breakdown by leak type, phase, time control, time trouble; monthly trend. Filters: time control, colour, opening, result, dates. |
-| Trainer | Your leak positions as SM-2 cards. Move on the board, see the engine's lines, grade Again / Hard / Good / Easy. |
+| 1 · Import & analyze | Choose dates and time formats, import from Chess.com, copy the matching analysis command, watch a live progress bar while the batch runs. Also: remove unwanted games, upload PGN. |
+| 2 · Leak report | Top 3 patterns with example boards; breakdown by leak type, phase, time control, time trouble; monthly trend. Filters: time control, colour, opening, result, dates. |
+| 3 · Trainer | Your leak positions as SM-2 cards. Move on the board, see the engine's lines, grade Again / Hard / Good / Easy. |
 | Find the quiet move | Same drill, forcing-bias positions only. |
 | Calibration | Judge 20 random flagged positions as Valid / False positive; precision per leak type shows which threshold to tune. |
-| Import | Fetch from Chess.com by date range and time format, remove unwanted games, upload PGN. |
 
 ## 6. Tuning loop
 
@@ -189,6 +191,7 @@ chesscoach/engine.py       Stockfish analysis + batch CLI
 chesscoach/leaks.py        detectors, refutation ply, SEE
 chesscoach/trainer.py      SM-2 and answer checking
 chesscoach/report.py       data frames for the leak report
+chesscoach/theme.py        walnut look (CSS, generated wood grain)
 chesscoach/board_component/  client-side training board
 ```
 

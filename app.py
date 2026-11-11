@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import random
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import chess
@@ -12,42 +13,88 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from chesscoach import config, db, importer, leaks, report, trainer
+from chesscoach import config, db, importer, leaks, report, theme, trainer
 
 st.set_page_config(page_title="chess-coach", page_icon="♟", layout="wide")
 
 _board_component = components.declare_component(
     "chesscoach_board", path=str(Path(__file__).parent / "chesscoach" / "board_component"))
 
-RED, GREEN = "#d93a3add", "#81b64cee"
-BOARD_COLORS = {"square light": "#e8cfa6", "square dark": "#a5713f", "margin": "#2a1b10", "coord": "#e8cfa6",
-                "square light lastmove": "#e8cfa6", "square dark lastmove": "#a5713f"}
+RED, GREEN, BOARD_COLORS = theme.RED, theme.GREEN, theme.BOARD_COLORS
 TIME_FORMATS = ["bullet", "blitz", "rapid", "daily"]
 
-# Walnut table: layered gradients give a wood grain without shipping an image.
-st.markdown("""
-<style>
-.stApp {
-  background-color: #3a2617;
-  background-image:
-    repeating-linear-gradient(91deg, rgba(0,0,0,.13) 0 2px, transparent 2px 11px),
-    repeating-linear-gradient(89deg, rgba(255,214,160,.035) 0 1px, transparent 1px 27px),
-    repeating-linear-gradient(90.5deg, rgba(0,0,0,.07) 0 6px, transparent 6px 61px),
-    linear-gradient(90deg, #3b2616 0%, #4a2f1b 22%, #38230f 47%, #4c311d 71%, #3a2415 100%);
-  background-attachment: fixed;
-}
-[data-testid="stHeader"] { background: transparent; }
-[data-testid="stSidebar"] { background: rgba(24, 15, 8, .82); border-right: 1px solid rgba(0,0,0,.35); }
-[data-testid="stSidebar"] blockquote { border-left: 3px solid #81b64c; color: #d9c7a8; }
-h1, h2, h3 { color: #fff4e0; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
-[data-testid="stMetric"], [data-testid="stExpander"], [data-testid="stDataFrame"] {
-  background: rgba(24, 15, 8, .55); border-radius: 8px;
-}
-[data-testid="stMetric"] { padding: 10px 14px; }
-.stButton > button { font-weight: 700; border-radius: 6px; box-shadow: 0 2px 0 rgba(0,0,0,.35); }
-[data-testid="stImage"] img { border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(theme.css(), unsafe_allow_html=True)
+
+
+_SELECTION_FILE = config.DB_PATH.parent / "ui_selection.json"
+
+
+def selection() -> tuple[date, date, list[str]]:
+    """Dates and time formats chosen on the Import page (remembered between visits)."""
+    ss = st.session_state
+    if "sel_from" not in ss:
+        today = date.today()
+        saved = {}
+        try:
+            saved = json.loads(_SELECTION_FILE.read_text())
+        except (OSError, ValueError):
+            pass
+        try:
+            ss["sel_from"] = date.fromisoformat(saved["from"])
+            ss["sel_to"] = min(today, date.fromisoformat(saved["to"])) if not saved.get("to_is_today") else today
+            ss["sel_formats"] = [f for f in saved["formats"] if f in TIME_FORMATS]
+        except (KeyError, ValueError, TypeError):
+            ss["sel_from"], ss["sel_to"] = today - timedelta(days=90), today
+            ss["sel_formats"] = list(config.ANALYZE_TIME_CONTROLS)
+    return ss["sel_from"], ss["sel_to"], ss["sel_formats"]
+
+
+def save_selection(d_from: date, d_to: date, formats: list[str]) -> None:
+    if (d_from, d_to, formats) == selection():
+        return
+    st.session_state.update(sel_from=d_from, sel_to=d_to, sel_formats=formats)
+    try:
+        _SELECTION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _SELECTION_FILE.write_text(json.dumps({"from": d_from.isoformat(), "to": d_to.isoformat(),
+                                               "to_is_today": d_to == date.today(), "formats": formats}))
+    except OSError:
+        pass
+
+
+def selection_counts(d_from: date, d_to: date, formats: list[str]) -> tuple[int, int]:
+    """(analyzed, total) analyzable games inside the selection."""
+    tcs = [f for f in formats if f != "daily"]
+    if not tcs:
+        return 0, 0
+    row = get_conn().execute(
+        f"""SELECT COALESCE(SUM(analysis_status = 'done'), 0), COUNT(*) FROM games
+            WHERE date BETWEEN ? AND ? AND tc_class IN ({','.join('?' * len(tcs))})""",
+        [d_from.isoformat(), d_to.isoformat(), *tcs]).fetchone()
+    return int(row[0]), int(row[1])
+
+
+def batch_command(d_from: date, d_to: date, formats: list[str]) -> str:
+    tcs = [f for f in formats if f != "daily"] or list(config.ANALYZE_TIME_CONTROLS)
+    return (f"python -m chesscoach.engine --batch --workers 4 --since {d_from} --until {d_to} "
+            f"--time-controls {' '.join(tcs)}")
+
+
+STEPS = [("", "Import", "pick dates & formats"), ("#analyze", "Analyze", "one terminal command"),
+         ("report", "Report", "see your leaks"), ("trainer", "Train", "drill your mistakes")]
+
+
+def step_bar(active: int) -> None:
+    """Import -> Analyze -> Report -> Train, always one click away."""
+    conn = get_conn()
+    done = [conn.execute("SELECT COUNT(*) FROM games").fetchone()[0] > 0,
+            conn.execute("SELECT COUNT(*) FROM analysis").fetchone()[0] > 0, False, False]
+    html = ""
+    for i, (path, name, hint) in enumerate(STEPS):
+        cls = "on" if i == active else ("done" if done[i] else "")
+        mark = "✓" if done[i] and i != active else str(i + 1)
+        html += (f'<a class="{cls}" href="/{path}" target="_self"><span class="n">{mark}</span>'
+                 f'<span>{name}<small>{hint}</small></span></a>')
+    st.markdown(f'<div class="steps">{html}</div>', unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -93,18 +140,15 @@ def move_label(fen: str, uci: str) -> str:
     return f"{board.fullmove_number}{dots}{san(fen, uci)}"
 
 
-def batch_hint() -> None:
-    st.code("python -m chesscoach.engine --batch --workers 4", language="bash")
-
-
 # =============================================================== Page 1: Leak report
 
 def page_report() -> None:
+    step_bar(2)
     st.title("Leak report")
     all_leaks, all_moves = load_frames(data_version())
     if all_moves.empty:
-        st.info("No analyzed games yet. Import games on the **Import** page, then run the overnight batch:")
-        batch_hint()
+        st.info("No analyzed games yet. Run this in a terminal, then refresh (results appear while it runs):")
+        st.code(batch_command(*selection()), language="bash")
         return
 
     with st.sidebar:
@@ -257,6 +301,7 @@ def quiet_fragment() -> None:
 
 
 def page_trainer() -> None:
+    step_bar(3)
     st.title("Trainer")
     st.caption("Positions from your own leaks, scheduled with SM-2. An answer counts if it is within "
                f"{config.PUZZLE_ACCEPT_TOLERANCE:g} win % of the best move.")
@@ -378,34 +423,49 @@ def page_calibration() -> None:
 
 # =============================================================== Import & status
 
+@st.fragment(run_every=5)
+def analysis_progress() -> None:
+    """Live view of the terminal batch; refreshes itself every 5 seconds."""
+    d_from, d_to, formats = selection()
+    done, total = selection_counts(d_from, d_to, formats)
+    if total == 0:
+        st.caption("No stored games in this selection yet. Import first.")
+        return
+    leaks_found = get_conn().execute("SELECT COUNT(*) FROM leaks").fetchone()[0]
+    st.progress(done / total, text=f"Analyzed {done} of {total} games in the selection · {leaks_found} leaks found")
+    hours = (total - done) * 10 / 3600
+    if done < total:
+        st.caption(f"About {hours:.1f} h left with 4 workers. Ctrl-C stops it; the same command resumes. "
+                   "This bar updates by itself.")
+    if done:
+        st.page_link(PAGES["report"], label="Open the leak report →", icon="📊")
+
+
 def page_import() -> None:
     conn = get_conn()
+    step_bar(0)
     st.title("Import")
-    counts = db.status_counts(conn)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Games stored", counts["games"])
-    c2.metric("Analyzed", counts["by_status"].get("done", 0))
-    pending = conn.execute(
-        f"SELECT COUNT(*) FROM games WHERE analysis_status='pending' AND tc_class IN "
-        f"({','.join('?' * len(config.ANALYZE_TIME_CONTROLS))})", config.ANALYZE_TIME_CONTROLS).fetchone()[0]
-    c3.metric("Waiting for analysis", pending)
-    c4.metric("Leaks found", counts["leaks"])
 
-    st.subheader("Chess.com")
-    newest = conn.execute("SELECT MAX(date) FROM games WHERE COALESCE(date, '') != ''").fetchone()[0]
+    st.subheader("1 · Choose your games")
+    d0, t0, f0 = selection()
     today = date.today()
-    default_from = date.fromisoformat(newest) if newest else today.replace(year=today.year - 1)
     u, f, t = st.columns([2, 1, 1])
-    user = u.text_input("Username", config.CHESSCOM_USERNAME)
-    d_from = f.date_input("From", default_from, min_value=date(2007, 1, 1), max_value=today)
-    d_to = t.date_input("To", today, min_value=date(2007, 1, 1), max_value=today)
-    formats = st.multiselect("Time formats", TIME_FORMATS, default=list(config.ANALYZE_TIME_CONTROLS),
+    user = u.text_input("Chess.com username", config.CHESSCOM_USERNAME)
+    d_from = f.date_input("From", d0, min_value=date(2007, 1, 1), max_value=today)
+    d_to = t.date_input("To", t0, min_value=date(2007, 1, 1), max_value=today)
+    formats = st.multiselect("Time formats", TIME_FORMATS, default=f0,
                              help="bullet: base under 3 min · blitz: under 10 min · rapid: 10 min and more · "
                                   "daily is stored but never analyzed")
+    save_selection(d_from, d_to, formats)
     ready = bool(user.strip()) and bool(formats) and d_from <= d_to
     if d_from > d_to:
         st.warning("'From' is after 'To'.")
-    if st.button("Import games", type="primary", disabled=not ready):
+    done, total = selection_counts(d_from, d_to, formats)
+    b, info = st.columns([1, 3])
+    clicked = b.button("Import games", type="primary", disabled=not ready, use_container_width=True)
+    info.caption(f"**{total}** games of this selection are already stored. Stored games are never downloaded "
+                 "twice, so pressing Import only fetches what is missing.")
+    if clicked:
         bar = st.progress(0.0, text="Contacting Chess.com…")
         try:
             stats = importer.import_chesscom(conn, user, d_from.isoformat(), d_to.isoformat(), formats,
@@ -417,17 +477,23 @@ def page_import() -> None:
         except Exception as exc:
             bar.empty()
             st.error(f"Chess.com import failed: {exc}")
-    st.caption("Games already stored are never downloaded twice, so you can widen the dates or formats later.")
 
+    st.markdown('<div id="analyze"></div>', unsafe_allow_html=True)
+    st.subheader("2 · Analyze them")
+    st.write("Copy this into a terminal (project folder, `.venv` active). It matches the selection above:")
+    st.code(batch_command(d_from, d_to, formats), language="bash")
+    analysis_progress()
+
+    st.subheader("Stored games")
     stored = pd.read_sql_query(
         """SELECT tc_class AS "Time format", COUNT(*) AS Games, MIN(NULLIF(date, '')) AS "First", MAX(date) AS "Last",
                   SUM(analysis_status = 'done') AS Analyzed
            FROM games GROUP BY tc_class ORDER BY Games DESC""", conn)
-    if not stored.empty:
-        st.subheader("Stored games")
+    if stored.empty:
+        st.caption("Nothing stored yet.")
+    else:
         st.dataframe(stored, hide_index=True, use_container_width=True)
-
-        with st.expander("Remove games outside the selection above"):
+        with st.expander("Remove stored games outside the selection"):
             n = db.delete_games_outside(conn, d_from.isoformat(), d_to.isoformat(), formats, dry_run=True)
             st.write(f"**{n}** stored games are outside {d_from} … {d_to} / {', '.join(formats) or 'no format'}. "
                      "Removing them also deletes their analysis, leaks and cards.")
@@ -446,20 +512,15 @@ def page_import() -> None:
                 stats = importer.import_pgn_text(conn, file.getvalue().decode("utf-8", errors="replace"), names)
                 st.write(f"{file.name}: {stats}")
 
-    st.subheader("Analyze")
-    st.write("Analysis runs in a terminal and resumes where it stopped. For the selection above:")
-    analyzable = [x for x in formats if x != "daily"]
-    st.code("python -m chesscoach.engine --batch --workers 4 "
-            f"--since {d_from} --until {d_to} --time-controls {' '.join(analyzable) or 'rapid blitz'}",
-            language="bash")
 
-
-st.navigation([
-    st.Page(page_report, title="Leak report", icon="📊", default=True),
-    st.Page(page_trainer, title="Trainer", icon="♟", url_path="trainer"),
-    st.Page(page_quiet, title="Find the quiet move", icon="🤫", url_path="quiet"),
-    st.Page(page_calibration, title="Calibration", icon="🎯", url_path="calibration"),
-    st.Page(page_import, title="Import", icon="⬇", url_path="import"),
-]).run()
+PAGES = {
+    "import": st.Page(page_import, title="1 · Import & analyze", icon="⬇", default=True),
+    "report": st.Page(page_report, title="2 · Leak report", icon="📊", url_path="report"),
+    "trainer": st.Page(page_trainer, title="3 · Trainer", icon="♟", url_path="trainer"),
+    "quiet": st.Page(page_quiet, title="Find the quiet move", icon="🤫", url_path="quiet"),
+    "calibration": st.Page(page_calibration, title="Calibration", icon="🎯", url_path="calibration"),
+}
+st.navigation({"Workflow": [PAGES["import"], PAGES["report"], PAGES["trainer"]],
+               "Extras": [PAGES["quiet"], PAGES["calibration"]]}).run()
 
 st.sidebar.markdown("> *I don't believe in psychology. I believe in good moves.*\n>\n> — Bobby Fischer")

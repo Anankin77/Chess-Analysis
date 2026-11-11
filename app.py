@@ -409,3 +409,5 @@ st.navigation([
     st.Page(page_calibration, title="Calibration", icon="🎯", url_path="calibration"),
     st.Page(page_import, title="Import", icon="⬇", url_path="import"),
 ]).run()
+
+st.sidebar.markdown("> *I don't believe in psychology. I believe in good moves.*\n>\n> — Bobby Fischer")

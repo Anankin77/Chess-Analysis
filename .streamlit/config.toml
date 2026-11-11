@@ -1,0 +1,11 @@
+# Wooden theme, matching the board colours.
+[theme]
+base = "light"
+primaryColor = "#8b5a2b"
+backgroundColor = "#f5ead6"
+secondaryBackgroundColor = "#e6d3b1"
+textColor = "#3b2a1a"
+font = "serif"
+
+[browser]
+gatherUsageStats = false

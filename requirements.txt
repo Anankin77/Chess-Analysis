@@ -1,0 +1,6 @@
+chess>=1.10
+streamlit>=1.37
+pandas>=2.0
+requests>=2.31
+rich>=13.0
+pytest>=8.0

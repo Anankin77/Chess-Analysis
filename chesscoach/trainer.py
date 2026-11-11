@@ -108,7 +108,7 @@ def puzzle_payload(conn: sqlite3.Connection, game_id: str, ply: int) -> Optional
     return {
         "fen": a.fen_before,
         "orientation": "white" if board.turn == chess.WHITE else "black",
-        "legal": [m.uci() for m in board.legal_moves],
+        "legal": [{"uci": m.uci(), "san": board.san(m)} for m in board.legal_moves],
         "accepted": sorted(accepted),
         "lines": [{"uci": ln.uci, "san": board.san(chess.Move.from_uci(ln.uci)), "win": round(ln.win, 1),
                    "ok": ln.uci in accepted, "pv": _san_line(board, ln.pv)} for ln in a.deep_lines],

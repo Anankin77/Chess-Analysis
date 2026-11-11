@@ -1,0 +1,254 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --text: #222; --muted: #666; --ok: #2e7d32; --bad: #c62828; --panel: rgba(127,127,127,.12); }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Source Sans Pro", system-ui, sans-serif; color: var(--text); background: transparent; }
+  #wrap { max-width: 480px; }
+  #board { position: relative; width: 100%; aspect-ratio: 1; display: grid; grid-template-columns: repeat(8, 1fr);
+           grid-template-rows: repeat(8, 1fr); border-radius: 4px; overflow: hidden; user-select: none; touch-action: none; }
+  .sq { position: relative; }
+  .sq.light { background: #f0d9b5; } .sq.dark { background: #b58863; }
+  .sq.sel { box-shadow: inset 0 0 0 4px rgba(20,85,30,.75); }
+  .sq.last { background-image: linear-gradient(rgba(155,199,0,.41), rgba(155,199,0,.41)); }
+  .sq.target::after { content: ""; position: absolute; left: 36%; top: 36%; width: 28%; height: 28%; border-radius: 50%;
+                      background: rgba(20,85,30,.45); pointer-events: none; }
+  .sq.target.occ::after { left: 4%; top: 4%; width: 92%; height: 92%; background: none; border: 5px solid rgba(20,85,30,.45); }
+  .sq svg { width: 100%; height: 100%; display: block; pointer-events: none; }
+  .coord { position: absolute; font-size: 10px; font-weight: 700; opacity: .9; pointer-events: none; }
+  .coord.file { right: 3px; bottom: 1px; } .coord.rank { left: 3px; top: 1px; }
+  .light .coord { color: #b58863; } .dark .coord { color: #f0d9b5; }
+  #arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #ghost { position: fixed; pointer-events: none; display: none; z-index: 10; }
+  #ghost svg { width: 100%; height: 100%; }
+  #promo { position: absolute; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; gap: 8px; z-index: 5; }
+  #promo button { width: 18%; aspect-ratio: 1; border: 0; border-radius: 6px; background: #f0d9b5; cursor: pointer; padding: 2px; }
+  #promo button svg { width: 100%; height: 100%; }
+  #status { margin: 10px 0 4px; font-size: 16px; font-weight: 600; min-height: 24px; }
+  #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
+  #reveal { display: none; background: var(--panel); border-radius: 6px; padding: 8px 10px; font-size: 14px; line-height: 1.45; }
+  #reveal .row { display: flex; gap: 8px; align-items: baseline; }
+  #reveal .mv { font-weight: 700; min-width: 64px; }
+  #reveal .win { min-width: 52px; font-variant-numeric: tabular-nums; }
+  #reveal .pv { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #reveal .tag { font-size: 12px; padding: 0 6px; border-radius: 8px; color: #fff; white-space: nowrap; flex-shrink: 0; }
+  .tag.ok { background: var(--ok); } .tag.bad { background: var(--bad); }
+  #reveal hr { border: 0; border-top: 1px solid rgba(127,127,127,.35); margin: 6px 0; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="board"><svg id="arrows" viewBox="0 0 8 8"></svg><div id="promo"></div></div>
+  <div id="status"></div>
+  <div id="reveal"></div>
+</div>
+<div id="ghost"></div>
+<script>
+// Minimal Streamlit component protocol (no build step, no CDN).
+const send = (type, data) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, data || {}), "*");
+const setHeight = () => send("streamlit:setFrameHeight", {height: document.getElementById("wrap").offsetHeight + 6});
+const setValue = (value) => send("streamlit:setComponentValue", {value, dataType: "json"});
+
+const FILES = "abcdefgh";
+const boardEl = document.getElementById("board"), arrowsEl = document.getElementById("arrows"),
+      statusEl = document.getElementById("status"), revealEl = document.getElementById("reveal"),
+      promoEl = document.getElementById("promo"), ghostEl = document.getElementById("ghost");
+
+let A = null;            // args from Python
+let puzzleId = null;
+let pos = {};            // square -> piece letter
+let selected = null, answered = false, lastMove = null, drag = null;
+
+const svgPiece = (p) => `<svg viewBox="0 0 45 45">${A.pieces[p]}</svg>`;
+const isMine = (p) => p && ((A.orientation === "white") === (p === p.toUpperCase()));
+
+function parseFen(fen) {
+  const out = {}, rows = fen.split(" ")[0].split("/");
+  rows.forEach((row, r) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) f += +ch; else { out[FILES[f] + (8 - r)] = ch; f++; }
+    }
+  });
+  return out;
+}
+
+function squares() {   // in display order (top-left first)
+  const list = [];
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const file = A.orientation === "white" ? f : 7 - f, rank = A.orientation === "white" ? 8 - r : r + 1;
+    list.push(FILES[file] + rank);
+  }
+  return list;
+}
+
+function xy(sq) {      // centre of a square in board units (0..8)
+  const f = FILES.indexOf(sq[0]), r = +sq[1];
+  return A.orientation === "white" ? [f + .5, 8 - r + .5] : [7 - f + .5, r - .5];
+}
+
+function draw() {
+  boardEl.querySelectorAll(".sq").forEach((e) => e.remove());
+  const targets = selected && !answered ? A.legal.filter((m) => m.uci.startsWith(selected)).map((m) => m.uci.slice(2, 4)) : [];
+  squares().forEach((sq, i) => {
+    const el = document.createElement("div");
+    const dark = (FILES.indexOf(sq[0]) + +sq[1]) % 2 === 1;
+    el.className = "sq " + (dark ? "dark" : "light");
+    el.dataset.sq = sq;
+    if (sq === selected) el.classList.add("sel");
+    if (lastMove && (sq === lastMove.slice(0, 2) || sq === lastMove.slice(2, 4))) el.classList.add("last");
+    if (targets.includes(sq)) el.classList.add("target", ...(pos[sq] ? ["occ"] : []));
+    let html = pos[sq] && !(drag && drag.moved && drag.from === sq) ? svgPiece(pos[sq]) : "";
+    if (i % 8 === 0) html += `<span class="coord rank">${sq[1]}</span>`;
+    if (i >= 56) html += `<span class="coord file">${sq[0]}</span>`;
+    el.innerHTML = html;
+    boardEl.insertBefore(el, arrowsEl);
+  });
+}
+
+function arrow(uci, color, width) {
+  const [x1, y1] = xy(uci.slice(0, 2)), [x2, y2] = xy(uci.slice(2, 4));
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
+  const head = .34, ex = x2 - ux * head, ey = y2 - uy * head, px = -uy * head * .55, py = ux * head * .55;
+  return `<g opacity=".8"><line x1="${x1}" y1="${y1}" x2="${ex}" y2="${ey}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>` +
+         `<polygon points="${x2},${y2} ${ex + px},${ey + py} ${ex - px},${ey - py}" fill="${color}"/></g>`;
+}
+
+function applyMove(uci) {
+  const from = uci.slice(0, 2), to = uci.slice(2, 4), piece = pos[from];
+  if (piece.toLowerCase() === "p" && from[0] !== to[0] && !pos[to]) delete pos[to[0] + from[1]];   // en passant
+  if (piece.toLowerCase() === "k" && Math.abs(FILES.indexOf(from[0]) - FILES.indexOf(to[0])) === 2) { // castling
+    const kingSide = to[0] === "g", rf = (kingSide ? "h" : "a") + from[1], rt = (kingSide ? "f" : "d") + from[1];
+    pos[rt] = pos[rf]; delete pos[rf];
+  }
+  delete pos[from];
+  pos[to] = uci.length > 4 ? (piece === "P" ? uci[4].toUpperCase() : uci[4]) : piece;
+  lastMove = uci;
+}
+
+function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c])); }
+
+function reveal(uci) {
+  const correct = A.accepted.includes(uci);
+  const san = (A.legal.find((m) => m.uci === uci) || {}).san || uci;
+  const known = A.lines.find((l) => l.uci === uci) || (A.played.uci === uci ? A.played : null);
+  statusEl.className = correct ? "ok" : "bad";
+  statusEl.textContent = correct ? `Correct: ${san}` :
+    `Not this time: ${san}` + (known ? ` (${known.win}%)` : " is outside the engine's top moves");
+  let html = A.lines.map((l) =>
+    `<div class="row"><span class="mv">${esc(l.san)}</span><span class="win">${l.win}%</span>` +
+    `<span class="tag ${l.ok ? "ok" : "bad"}">${l.ok ? "accepted" : "too weak"}</span><span class="pv">${esc(l.pv)}</span></div>`).join("");
+  html += `<hr><div class="row"><span class="mv">${esc(A.played.san)}</span><span class="win">${A.played.win}%</span>` +
+          `<span class="tag bad">played in the game</span><span class="pv">${esc(A.played.pv)}</span></div>`;
+  revealEl.innerHTML = html;
+  revealEl.style.display = "block";
+  let arrows = arrow(A.played.uci, "#c62828", .13);
+  A.lines.filter((l) => l.ok).forEach((l, i) => { arrows += arrow(l.uci, "#2e7d32", i === 0 ? .2 : .13); });
+  arrowsEl.innerHTML = arrows;
+  return correct;
+}
+
+function tryMove(from, to) {
+  const cands = A.legal.filter((m) => m.uci.slice(0, 4) === from + to);
+  if (!cands.length) return false;
+  if (cands.length === 1) { commit(cands[0].uci); return true; }
+  const white = pos[from] === "P";                       // promotion: let the player choose
+  promoEl.innerHTML = "";
+  for (const p of "qrbn") {
+    const b = document.createElement("button");
+    b.innerHTML = svgPiece(white ? p.toUpperCase() : p);
+    b.onclick = () => { promoEl.style.display = "none"; commit(from + to + p); };
+    promoEl.appendChild(b);
+  }
+  promoEl.style.display = "flex";
+  return true;
+}
+
+function commit(uci) {
+  if (answered) return;
+  answered = true; selected = null;
+  applyMove(uci);
+  draw();
+  const correct = reveal(uci);
+  setHeight();
+  // One message to Python so the grade buttons can appear; the check itself ran here, client side.
+  setValue({puzzle: puzzleId, uci, correct});
+}
+
+function squareAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const sq = el && el.closest ? el.closest(".sq") : null;
+  return sq ? sq.dataset.sq : null;
+}
+
+boardEl.addEventListener("pointerdown", (e) => {
+  if (answered || !A || promoEl.style.display === "flex") return;
+  const sq = squareAt(e.clientX, e.clientY);
+  if (!sq) return;
+  if (selected && sq !== selected && tryMove(selected, sq)) return;
+  if (isMine(pos[sq])) {
+    selected = sq;
+    drag = {from: sq, moved: false, x: e.clientX, y: e.clientY};
+    boardEl.setPointerCapture(e.pointerId);
+  } else selected = null;
+  draw();
+});
+
+boardEl.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) {
+    drag.moved = true;
+    const size = boardEl.clientWidth / 8;
+    ghostEl.style.width = ghostEl.style.height = size + "px";
+    ghostEl.innerHTML = svgPiece(pos[drag.from]);
+    ghostEl.style.display = "block";
+    draw();
+  }
+  if (drag.moved) {
+    const size = boardEl.clientWidth / 8;
+    ghostEl.style.left = e.clientX - size / 2 + "px"; ghostEl.style.top = e.clientY - size / 2 + "px";
+  }
+});
+
+function endDrag(e) {
+  if (!drag) return;
+  const d = drag; drag = null;
+  ghostEl.style.display = "none";
+  if (d.moved) {
+    const sq = squareAt(e.clientX, e.clientY);
+    if (!(sq && sq !== d.from && tryMove(d.from, sq))) draw();
+  }
+}
+boardEl.addEventListener("pointerup", endDrag);
+boardEl.addEventListener("pointercancel", endDrag);
+
+function applyTheme(theme) {
+  if (!theme) return;
+  const s = document.documentElement.style;
+  s.setProperty("--text", theme.textColor || "#222");
+  s.setProperty("--muted", theme.base === "dark" ? "#aaa" : "#666");
+  if (theme.font) document.body.style.fontFamily = theme.font;
+}
+
+window.addEventListener("message", (e) => {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  applyTheme(e.data.theme);
+  const args = e.data.args;
+  if (args.puzzle_id !== puzzleId) {                     // new puzzle: reset client state
+    A = args; puzzleId = args.puzzle_id;
+    pos = parseFen(A.fen);
+    selected = null; answered = false; lastMove = null; drag = null;
+    arrowsEl.innerHTML = ""; revealEl.style.display = "none"; promoEl.style.display = "none";
+    statusEl.className = "";
+    statusEl.textContent = (A.orientation === "white" ? "White" : "Black") + " to move. " + (A.prompt || "");
+    draw();
+  }
+  setHeight();
+});
+window.addEventListener("resize", setHeight);
+send("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body>
+</html>

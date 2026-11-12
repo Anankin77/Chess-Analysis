@@ -142,6 +142,23 @@ Open `http://YOUR-COMPUTER-IP:8501` on the phone, on the same Wi-Fi (the Import 
 address). The layout adapts to small screens; pieces move by tap-tap or drag. Anyone on that Wi-Fi can
 open the app while it runs this way, so use it on a network you trust.
 
+### Hosted (no laptop needed)
+
+GitHub cannot run the app itself, but [Streamlit Community Cloud](https://share.streamlit.io) runs it
+for free straight from this repository:
+
+1. Sign in at share.streamlit.io with GitHub.
+2. **Create app** → repository `Chess-Analysis`, branch `main`, main file `app.py` → **Deploy**.
+3. Open the app's URL on any device. In the app's sharing settings, keep it private to your account.
+
+`packages.txt` installs Stockfish there automatically. Limits of the free server:
+
+- It is slow (about one shared core): fine for **Game review** of single games and for training,
+  not for analyzing thousands of games. Do the big batch on your own computer.
+- Its disk is wiped when the app restarts or sleeps. Use **Import → Backup and restore** to download
+  your data after a session and restore it later. A backup from your computer (`data/chesscoach.db`)
+  can be restored there too, which is the way to bring a big analysis to your phone.
+
 ## 6. Tuning loop
 
 1. Calibrate 20 positions.

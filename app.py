@@ -763,6 +763,31 @@ def page_import() -> None:
                 st.write(f"{file.name}: {stats}")
 
 
+    with st.expander("Backup and restore (do this before a hosted app goes to sleep)"):
+        st.write("Everything (games, analysis, cards, training history) is one file. A hosted copy of the app "
+                 "loses it when the server restarts, so download it after a session and restore it next time.")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if config.DB_PATH.exists():
+            st.download_button("⬇ Download my data", config.DB_PATH.read_bytes(),
+                               file_name=f"chesscoach-{date.today()}.db", mime="application/octet-stream")
+        backup = st.file_uploader("Restore from a backup file", type=["db"], key="restore_file")
+        sure = st.checkbox("Replace the current data with this backup", key="restore_sure")
+        if backup and st.button("Restore", disabled=not sure):
+            data = backup.getvalue()
+            if not data.startswith(b"SQLite format 3"):
+                st.error("That is not a chess-coach backup file.")
+            else:
+                conn.close()
+                for suffix in ("", "-wal", "-shm"):
+                    Path(str(config.DB_PATH) + suffix).unlink(missing_ok=True)
+                config.DB_PATH.write_bytes(data)
+                get_conn.clear()
+                st.cache_data.clear()
+                st.session_state.pop("restore_sure", None)
+                st.toast("Backup restored")
+                st.rerun()
+
+
 PAGES = {
     "import": st.Page(page_import, title="1 · Import & analyze", icon="⬇", default=True),
     "game": st.Page(page_game, title="Game review", icon="🔍", url_path="game"),

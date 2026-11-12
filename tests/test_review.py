@@ -91,6 +91,6 @@ def test_walkthrough_covers_every_move_with_explanations():
     assert "**The plan behind it:** **Nbd2** develops the knight" in text
     assert "**Why yours falls short:** the reply is **a6**, which attacks the bishop on b5." in text
     assert "forcing bias" in text
-    assert last["best"]["sans"][:2] == ["3.d3", "Nf6"] and len(last["best"]["fens"]) == 5
+    assert last["best"]["sans"][:2] == ["3.d3", "Nf6"] and len(last["best"]["fens"]) == 4   # the illegal 5th move is dropped
     assert last["cont"]["sans"] == ["3.Bb5", "a6", "4.Ba4"]
     assert w["plies"][1]["best"] is None and w["plies"][1]["cont"] is None

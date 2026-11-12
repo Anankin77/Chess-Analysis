@@ -212,7 +212,8 @@ def move_ideas(board: chess.Board, move: chess.Move, prev_move: Optional[chess.M
         closer = (min(chess.square_distance(move.to_square, c) for c in CENTRE)
                   < min(chess.square_distance(move.from_square, c) for c in CENTRE))
         positional.append("activates the king" if heavy <= 2 and closer else f"steps the king to {to}")
-    weak = ("reroutes", "repositions", "brings the queen", "steps the king", "brings the rook")
+    weak = ("reroutes", "repositions", "brings the queen", "steps the king", "brings the rook",
+            "guards the", "gives the king an escape")
     if ideas:                                           # filler adds nothing next to a concrete idea
         positional = [p for p in positional if not p.startswith(weak)]
     if len(ideas) < limit and not board.is_capture(move):

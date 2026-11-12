@@ -13,7 +13,26 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from chesscoach import config, db, importer, leaks, report, review, runner, theme, trainer
+import chesscoach
+
+
+def _reload_package_if_updated() -> None:
+    """A hosted app pulls new code and re-runs this file, but keeps the old
+    `chesscoach` modules in memory. Reload them whenever their files changed."""
+    import importlib
+    import sys
+    stamp = max(f.stat().st_mtime for f in Path(chesscoach.__file__).parent.glob("*.py"))
+    if getattr(chesscoach, "_loaded_stamp", None) != stamp:
+        for name in ("config", "models", "db", "book", "importer", "engine", "leaks", "trainer",
+                     "report", "review", "runner", "theme"):
+            module = sys.modules.get(f"chesscoach.{name}")
+            if module is not None:
+                importlib.reload(module)
+        chesscoach._loaded_stamp = stamp
+
+
+_reload_package_if_updated()
+from chesscoach import config, db, importer, leaks, report, review, runner, theme, trainer  # noqa: E402
 
 st.set_page_config(page_title="chess-coach", page_icon="♟", layout="wide")
 

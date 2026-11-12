@@ -76,7 +76,8 @@ def card_queue(conn: sqlite3.Connection, leak_type: Optional[str] = None,
     return conn.execute(sql, params).fetchall()
 
 
-def review(conn: sqlite3.Connection, card_id: int, grade: int, today: Optional[date] = None) -> CardState:
+def review(conn: sqlite3.Connection, card_id: int, grade: int, today: Optional[date] = None,
+           correct: Optional[bool] = None) -> CardState:
     today = today or date.today()
     row = conn.execute("SELECT * FROM srs_cards WHERE id=?", (card_id,)).fetchone()
     new = sm2(CardState(row["repetition"], row["interval"], row["ease_factor"]), grade, today)
@@ -86,7 +87,30 @@ def review(conn: sqlite3.Connection, card_id: int, grade: int, today: Optional[d
                last_reviewed=?, reviews=reviews+1, lapses=lapses+? WHERE id=?""",
             (new.repetition, new.interval, new.ease_factor, new.due_date.isoformat(), grade,
              today.isoformat(), int(grade < 3), card_id))
+        conn.execute("INSERT INTO review_log (card_id, game_id, ply, reviewed_on, grade, correct) VALUES (?,?,?,?,?,?)",
+                     (card_id, row["game_id"], row["ply"], today.isoformat(), grade,
+                      None if correct is None else int(correct)))
     return new
+
+
+def training_stats(conn: sqlite3.Connection, today: Optional[date] = None) -> dict:
+    """Numbers for the trainer header: today's work, day streak, accuracy per leak type (last 30 days)."""
+    today = today or date.today()
+    t = today.isoformat()
+    n, ok = conn.execute("SELECT COUNT(*), COALESCE(SUM(correct), 0) FROM review_log WHERE reviewed_on=?",
+                         (t,)).fetchone()
+    days = {r[0] for r in conn.execute("SELECT DISTINCT reviewed_on FROM review_log")}
+    streak, day = 0, today if t in days else today - timedelta(days=1)
+    while day.isoformat() in days:
+        streak, day = streak + 1, day - timedelta(days=1)
+    since = (today - timedelta(days=30)).isoformat()
+    by_type = {}
+    for leak_type, total, right in conn.execute(
+            """SELECT l.leak_type, COUNT(*), COALESCE(SUM(r.correct), 0) FROM review_log r
+               JOIN leaks l ON l.game_id = r.game_id AND l.ply = r.ply
+               WHERE r.reviewed_on >= ? AND r.correct IS NOT NULL GROUP BY l.leak_type""", (since,)):
+        by_type[leak_type] = (int(right), int(total))
+    return {"today": int(n), "today_correct": int(ok), "streak": streak, "by_type": by_type}
 
 
 # --- puzzle payload for the board component -------------------------------------------------
@@ -98,8 +122,28 @@ def _san_line(board: chess.Board, ucis: list[str], limit: int = 8) -> str:
         return ""
 
 
+def _walk(board: chess.Board, ucis: list[str], limit: int = 14) -> dict:
+    """Positions along a line so the client can step through it without chess logic."""
+    b = board.copy(stack=False)
+    out: dict = {"ucis": [], "sans": [], "fens": []}
+    for uci in ucis[:limit]:
+        try:
+            move = chess.Move.from_uci(uci)
+            if move not in b.legal_moves:
+                break
+            dots = f"{b.fullmove_number}." if b.turn == chess.WHITE else (f"{b.fullmove_number}…" if not out["sans"] else "")
+            out["sans"].append(dots + b.san(move))
+            b.push(move)
+        except ValueError:
+            break
+        out["ucis"].append(uci)
+        out["fens"].append(b.fen())
+    return out
+
+
 def puzzle_payload(conn: sqlite3.Connection, game_id: str, ply: int) -> Optional[dict]:
-    """Everything the client-side board needs to check an answer without a server round trip."""
+    """Everything the client-side board needs to check an answer and replay the
+    lines without a server round trip."""
     a = db.get_analysis(conn, game_id, ply)
     if a is None:
         return None
@@ -111,8 +155,7 @@ def puzzle_payload(conn: sqlite3.Connection, game_id: str, ply: int) -> Optional
         "legal": [{"uci": m.uci(), "san": board.san(m)} for m in board.legal_moves],
         "accepted": sorted(accepted),
         "lines": [{"uci": ln.uci, "san": board.san(chess.Move.from_uci(ln.uci)), "win": round(ln.win, 1),
-                   "ok": ln.uci in accepted, "pv": _san_line(board, ln.pv)} for ln in a.deep_lines],
+                   "ok": ln.uci in accepted, **_walk(board, ln.pv)} for ln in a.deep_lines],
         "played": {"uci": a.my_move, "san": board.san(chess.Move.from_uci(a.my_move)),
-                   "win": round(a.my_deep.win, 1),
-                   "pv": _san_line(board, [a.my_move] + a.pv_after, 10)},
+                   "win": round(a.my_deep.win, 1), **_walk(board, [a.my_move] + a.pv_after)},
     }

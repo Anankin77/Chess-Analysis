@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from chesscoach import config, db, importer, leaks, report, theme, trainer
+from chesscoach import config, db, importer, leaks, report, runner, theme, trainer
 
 st.set_page_config(page_title="chess-coach", page_icon="♟", layout="wide")
 
@@ -79,7 +79,18 @@ def batch_command(d_from: date, d_to: date, formats: list[str]) -> str:
             f"--time-controls {' '.join(tcs)}")
 
 
-STEPS = [("", "Import", "pick dates & formats"), ("#analyze", "Analyze", "one terminal command"),
+def lan_ip() -> str:
+    """This computer's address on the local network (no packets are sent)."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))
+            return sock.getsockname()[0]
+    except OSError:
+        return "YOUR-COMPUTER-IP"
+
+
+STEPS = [("", "Import", "pick dates & formats"), ("#analyze", "Analyze", "one click, runs in background"),
          ("report", "Report", "see your leaks"), ("trainer", "Train", "drill your mistakes")]
 
 
@@ -142,13 +153,50 @@ def move_label(fen: str, uci: str) -> str:
 
 # =============================================================== Page 1: Leak report
 
+@st.fragment
+def leak_browser(lk: pd.DataFrame) -> None:
+    """Pick any flagged move and replay it on the board (reruns only this block)."""
+    conn = get_conn()
+    order = st.radio("Order", ["Most costly", "Newest"], horizontal=True, label_visibility="collapsed")
+    view = lk.sort_values("win_drop" if order == "Most costly" else "date", ascending=False).head(300)
+    table = pd.DataFrame({
+        "Date": view["date"],
+        "Opponent": view["black"].where(view["my_color"] == "white", view["white"]),
+        "Leak": view["label"],
+        "Played": [move_label(f, m) for f, m in zip(view["fen_before"], view["my_move"])],
+        "Best": [san(f, m) for f, m in zip(view["fen_before"], view["best_move"])],
+        "Win % lost": view["win_drop"].round(0),
+        "Phase": view["phase"],
+        "Format": view["tc_class"],
+        "Time trouble": view["time_trouble"],
+    })
+    left, right = st.columns([3, 2])
+    with left:
+        event = st.dataframe(table, hide_index=True, use_container_width=True, height=420,
+                             on_select="rerun", selection_mode="single-row", key="leak_table")
+        st.caption(f"Showing {len(view)} of {len(lk)} leaks. Select a row to replay it.")
+    rows = event.selection.rows if event and event.selection else []
+    chosen = view.iloc[rows[0] if rows else 0]
+    with right:
+        payload = trainer.puzzle_payload(conn, chosen["game_id"], int(chosen["ply"]))
+        if payload:
+            _board_component(puzzle_id=f"view-{chosen['id']}", mode="view", pieces=chess.svg.PIECES,
+                             prompt=f"{chosen['label']} · −{chosen['win_drop']:.0f} win %. Replay the lines below.",
+                             key="leak_viewer", default=None, **payload)
+            for line in explain_leak(conn, chosen["game_id"], int(chosen["ply"])):
+                st.markdown(line)
+            if chosen["url"]:
+                st.caption(f"[Open the game on Chess.com]({chosen['url']})")
+
+
+
 def page_report() -> None:
     step_bar(2)
     st.title("Leak report")
     all_leaks, all_moves = load_frames(data_version())
     if all_moves.empty:
-        st.info("No analyzed games yet. Run this in a terminal, then refresh (results appear while it runs):")
-        st.code(batch_command(*selection()), language="bash")
+        st.info("No analyzed games yet. Start the analysis on the Import page; results appear here while it runs.")
+        st.page_link(PAGES["import"], label="Go to Import & analyze →", icon="⬇")
         return
 
     with st.sidebar:
@@ -175,6 +223,13 @@ def page_report() -> None:
     if lk.empty:
         st.success("No leaks match these filters.")
         return
+
+    notes = report.headlines(lk, moves)
+    if notes:
+        st.subheader("What the numbers say")
+        with st.container(border=True):
+            for note in notes:
+                st.markdown("- " + note)
 
     st.subheader("Top 3 leak patterns")
     for rank, pat in enumerate(report.top_patterns(lk).itertuples(), start=1):
@@ -226,11 +281,49 @@ def page_report() -> None:
         st.caption("Needs analyzed games from at least two months.")
         st.dataframe(trend)
 
+    st.subheader("Browse every leak")
+    leak_browser(lk)
+
 
 # =============================================================== Pages 2 + 3: training
 
+def explain_leak(conn, game_id: str, ply: int) -> list[str]:
+    """Why this position is on a card, in one line per leak (templated from the stored numbers)."""
+    out = []
+    for lk in conn.execute("SELECT * FROM leaks WHERE game_id=? AND ply=? ORDER BY leak_type", (game_id, ply)):
+        fen = lk["fen_before"]
+        board, move = chess.Board(fen), chess.Move.from_uci(lk["my_move"])
+        mine, best = san(fen, lk["my_move"]), san(fen, lk["best_move"])
+        if lk["leak_type"] == "forcing_bias":
+            kind = ("a capture" if board.is_capture(move) else "a check" if board.gives_check(move) else "a threat")
+            out.append(f"**Forcing bias** · you played {kind} ({mine}); the position needed the quiet **{best}**.")
+        elif lk["sub_type"] == "positional":
+            out.append(f"**Horizon (positional)** · {mine} holds at depth {config.SHALLOW_DEPTH} but drifts "
+                       f"{lk['win_drop']:.0f} win % deeper, with no single tactic. Compare the lines move by move.")
+        else:
+            what = "you get mated" if lk["sub_type"] == "mate" else "material goes"
+            out.append(f"**Horizon ({lk['sub_type']})** · {mine} looked fine at depth {config.SHALLOW_DEPTH}; "
+                       f"{what} on ply {lk['refutation_ply']} of the reply. Replay the game line with ▶ and "
+                       "find the move you stopped calculating at.")
+    return out
+
+
+def training_header(conn) -> None:
+    stats = trainer.training_stats(conn)
+    names = {"forcing_bias": "Quiet-move accuracy (30 d)", "horizon": "Horizon accuracy (30 d)"}
+    cols = st.columns(4)
+    acc = f"{100 * stats['today_correct'] / stats['today']:.0f}%" if stats["today"] else "–"
+    cols[0].metric("Solved today", stats["today"], acc + " correct" if stats["today"] else None, delta_color="off")
+    cols[1].metric("Day streak", stats["streak"])
+    for col, key in zip(cols[2:], names):
+        right, total = stats["by_type"].get(key, (0, 0))
+        col.metric(names[key], f"{100 * right / total:.0f}%" if total else "–",
+                   f"{right}/{total}" if total else None, delta_color="off")
+
+
 def _training_ui(mode: str, leak_type: str | None, prompt: str, allow_ahead_default: bool) -> None:
     conn = get_conn()
+    training_header(conn)
     ahead = st.toggle("Include cards that are not due yet", value=allow_ahead_default, key=f"{mode}_ahead")
     due = trainer.card_queue(conn, leak_type)
     queue = trainer.card_queue(conn, leak_type, include_not_due=True) if ahead else due
@@ -264,15 +357,17 @@ def _training_ui(mode: str, leak_type: str | None, prompt: str, allow_ahead_defa
                     f"interval {card['interval']} d · ease {card['ease_factor']:.2f}")
         answered = bool(answer) and answer.get("puzzle") == card["id"]
         if not answered:
-            st.caption("Make your move on the board. The leak type is revealed after you answer.")
+            st.caption("Make your move on the board (tap or drag). Afterwards you can replay every line.")
             if st.button("Skip", key=f"{mode}_skip"):
                 ids = list(by_id)
                 st.session_state[state_key] = ids[(ids.index(card["id"]) + 1) % len(ids)]
                 st.rerun(scope="fragment")
             return
         correct = bool(answer.get("correct"))
-        st.markdown(("✅ Correct." if correct else "❌ Incorrect.") + f" Leak: `{card['leak_labels']}` "
-                    f"(cost {card['win_drop']:.0f} win % in the game).")
+        st.markdown(("✅ **Correct.**" if correct else "❌ **Incorrect.**") +
+                    f" This cost {card['win_drop']:.0f} win % in the game.")
+        for line in explain_leak(conn, card["game_id"], card["ply"]):
+            st.markdown(line)
         game = conn.execute("SELECT url, white, black, date FROM games WHERE id=?", (card["game_id"],)).fetchone()
         st.caption(f"{game['white']} – {game['black']}, {game['date']}" +
                    (f" · [open game]({game['url']})" if game["url"] else ""))
@@ -283,7 +378,7 @@ def _training_ui(mode: str, leak_type: str | None, prompt: str, allow_ahead_defa
             if col.button(name, key=f"{mode}_grade_{grade}", use_container_width=True,
                           disabled=(not correct and grade > 3),
                           type="primary" if (grade == 4 if correct else grade == 1) else "secondary"):
-                new = trainer.review(conn, card["id"], grade)
+                new = trainer.review(conn, card["id"], grade, correct=correct)
                 st.session_state.pop(state_key, None)
                 st.toast(f"{name}: next review in {new.interval} day(s)")
                 st.rerun(scope="fragment")
@@ -425,18 +520,41 @@ def page_calibration() -> None:
 
 @st.fragment(run_every=5)
 def analysis_progress() -> None:
-    """Live view of the terminal batch; refreshes itself every 5 seconds."""
+    """Start / stop the batch and watch it; refreshes itself every 5 seconds."""
     d_from, d_to, formats = selection()
     done, total = selection_counts(d_from, d_to, formats)
     if total == 0:
         st.caption("No stored games in this selection yet. Import first.")
         return
+    pid = runner.running_pid()
+    tcs = [f for f in formats if f != "daily"]
+    c1, c2, c3 = st.columns([2, 1, 3])
+    workers = c2.number_input("Workers", 1, 64, runner.default_workers(), disabled=bool(pid),
+                              help="Stockfish processes in parallel. Use about one per physical core.")
+    if pid:
+        if c1.button("■ Stop analysis", use_container_width=True):
+            runner.stop()
+            st.toast("Stopping: finished games are saved, the rest resumes next time.")
+    elif done < total:
+        if c1.button("▶ Start analysis", type="primary", use_container_width=True):
+            try:
+                runner.start(d_from.isoformat(), d_to.isoformat(), tcs, int(workers))
+                st.toast("Analysis started in the background")
+                st.rerun(scope="fragment")
+            except FileNotFoundError as exc:
+                st.error(str(exc))
+    remaining = total - done
+    hours = remaining * 40 / max(1, int(workers)) / 3600
+    c3.caption(("**Running.** " if pid else "") +
+               (f"{remaining} games left, roughly {hours:.1f} h with {int(workers)} workers. You can close this "
+                "page; stop and resume any time." if remaining else "Everything in this selection is analyzed."))
     leaks_found = get_conn().execute("SELECT COUNT(*) FROM leaks").fetchone()[0]
     st.progress(done / total, text=f"Analyzed {done} of {total} games in the selection · {leaks_found} leaks found")
-    hours = (total - done) * 10 / 3600
-    if done < total:
-        st.caption(f"About {hours:.1f} h left with 4 workers. Ctrl-C stops it; the same command resumes. "
-                   "This bar updates by itself.")
+    if not pid and done < total:
+        tail = runner.log_tail()
+        if tail and ("Error" in tail or "Traceback" in tail or "not found" in tail):
+            st.error("The last run stopped with a problem:")
+            st.code(tail)
     if done:
         st.page_link(PAGES["report"], label="Open the leak report →", icon="📊")
 
@@ -480,9 +598,14 @@ def page_import() -> None:
 
     st.markdown('<div id="analyze"></div>', unsafe_allow_html=True)
     st.subheader("2 · Analyze them")
-    st.write("Copy this into a terminal (project folder, `.venv` active). It matches the selection above:")
-    st.code(batch_command(d_from, d_to, formats), language="bash")
     analysis_progress()
+    with st.expander("Run it in a terminal instead"):
+        st.write("Same thing from the project folder with `.venv` active:")
+        st.code(batch_command(d_from, d_to, formats), language="bash")
+    with st.expander("Use chess-coach on your phone"):
+        st.write("Start the app so other devices on your Wi-Fi can reach it:")
+        st.code("streamlit run app.py --server.address 0.0.0.0", language="bash")
+        st.write(f"Then open **http://{lan_ip()}:8501** on the phone (same Wi-Fi as this computer).")
 
     st.subheader("Stored games")
     stored = pd.read_sql_query(

@@ -87,3 +87,29 @@ def test_review_updates_card_and_queue():
     db.replace_leaks(conn, None, [LeakFinding(ply=10, leak_type="forcing_bias", **finding)], T.isoformat())
     row = conn.execute("SELECT repetition, reviews FROM srs_cards WHERE ply=10").fetchone()
     assert (row["repetition"], row["reviews"]) == (1, 1)
+
+
+def test_review_log_and_training_stats():
+    conn = db.connect(":memory:")
+    conn.execute("INSERT INTO games (id, source, my_color, pgn, imported_at) VALUES ('g','pgn','white','','x')")
+    fen = "4k3/8/8/8/3n4/8/7P/R3K3 w - - 0 1"
+    finding = dict(game_id="g", sub_type=None, refutation_ply=None, win_drop=20.0, phase="endgame",
+                   time_trouble="no", fen_before=fen, my_move="h2h3", best_move="a1a2")
+    db.replace_leaks(conn, None, [LeakFinding(ply=10, leak_type="forcing_bias", **finding),
+                                  LeakFinding(ply=20, leak_type="horizon", **{**finding, "sub_type": "mate"})],
+                     T.isoformat())
+    a, b = trainer.card_queue(conn, today=T)
+    trainer.review(conn, a["id"], 4, T - timedelta(days=1), correct=True)
+    trainer.review(conn, a["id"], 4, T, correct=True)
+    trainer.review(conn, b["id"], 1, T, correct=False)
+    stats = trainer.training_stats(conn, T)
+    assert (stats["today"], stats["today_correct"], stats["streak"]) == (2, 1, 2)
+    assert stats["by_type"] == {"forcing_bias": (2, 2), "horizon": (0, 1)}
+    assert trainer.training_stats(conn, T + timedelta(days=3))["streak"] == 0
+
+
+def test_walk_builds_replayable_line():
+    import chess
+    out = trainer._walk(chess.Board(), ["e2e4", "e7e5", "g1f3", "zzzz"])
+    assert out["sans"] == ["1.e4", "e5", "2.Nf3"] and len(out["fens"]) == 3
+    assert trainer._walk(chess.Board("4k3/8/8/8/8/8/8/4K3 b - - 0 9"), ["e8e7"])["sans"] == ["9…Ke7"]

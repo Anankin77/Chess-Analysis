@@ -11,7 +11,8 @@ Finds two decision leaks in your own games and drills them with spaced repetitio
 2. `pip install -r requirements.txt`
 3. Open the app: `streamlit run app.py`
 4. Import page: choose dates and time formats, press **Import games**
-5. Analyze overnight: `python -m chesscoach.engine --batch --workers 4`
+5. Same page: press **Start analysis** (runs in the background; stop and resume any time)
+6. Read the report, then train
 
 ## 1. Install
 
@@ -120,15 +121,25 @@ hash table is cleared between searches so the shallow search is honestly shallow
 streamlit run app.py
 ```
 
-A step bar on top of every page follows the workflow: **Import → Analyze → Report → Train**.
+A step bar on top follows the workflow: **Import → Analyze → Report → Train**.
 
 | Page | What it does |
 |---|---|
-| 1 · Import & analyze | Choose dates and time formats, import from Chess.com, copy the matching analysis command, watch a live progress bar while the batch runs. Also: remove unwanted games, upload PGN. |
-| 2 · Leak report | Top 3 patterns with example boards; breakdown by leak type, phase, time control, time trouble; monthly trend. Filters: time control, colour, opening, result, dates. |
-| 3 · Trainer | Your leak positions as SM-2 cards. Move on the board, see the engine's lines, grade Again / Hard / Good / Easy. |
+| 1 · Import & analyze | Choose dates and time formats, import from Chess.com, **Start / Stop analysis** with a live progress bar. Also: remove unwanted games, upload PGN, terminal command. |
+| 2 · Leak report | Headline findings, top 3 patterns with boards, breakdown by leak type / phase / time control / time trouble, monthly trend, and a browser to replay every leak. Filters: time control, colour, opening, result, dates. |
+| 3 · Trainer | Your leak positions as SM-2 cards. Move, then replay the engine lines and the refutation of your game move with ◀ ▶. Shows today's count, day streak and 30-day accuracy per leak type. |
 | Find the quiet move | Same drill, forcing-bias positions only. |
 | Calibration | Judge 20 random flagged positions as Valid / False positive; precision per leak type shows which threshold to tune. |
+
+### On your phone
+
+```bash
+streamlit run app.py --server.address 0.0.0.0
+```
+
+Open `http://YOUR-COMPUTER-IP:8501` on the phone, on the same Wi-Fi (the Import page shows the exact
+address). The layout adapts to small screens; pieces move by tap-tap or drag. Anyone on that Wi-Fi can
+open the app while it runs this way, so use it on a network you trust.
 
 ## 6. Tuning loop
 
@@ -192,6 +203,7 @@ chesscoach/leaks.py        detectors, refutation ply, SEE
 chesscoach/trainer.py      SM-2 and answer checking
 chesscoach/report.py       data frames for the leak report
 chesscoach/theme.py        walnut look (CSS, generated wood grain)
+chesscoach/runner.py       start / stop the batch from the app
 chesscoach/board_component/  client-side training board
 ```
 

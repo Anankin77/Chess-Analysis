@@ -112,5 +112,20 @@ h2, h3 {{ color: var(--cream); text-shadow: 0 1px 2px rgba(0,0,0,.6); }}
 [data-testid="stImage"] img:hover {{ transform: translateY(-4px) scale(1.015); box-shadow: 0 18px 34px rgba(0,0,0,.65); }}
 [data-testid="stProgress"] > div > div > div > div {{ background: linear-gradient(90deg, var(--green-dark), var(--green)); }}
 iframe[title*="chesscoach_board"] {{ border-radius: 8px; }}
+
+/* ---- phones ---- */
+@media (max-width: 640px) {{
+  [data-testid="stMainBlockContainer"], .block-container {{ padding: 3.2rem .8rem 4rem !important; }}
+  h1 {{ font-size: 1.9rem !important; }}
+  h2, h3 {{ font-size: 1.25rem !important; }}
+  .steps {{ gap: 6px; margin-bottom: 10px; }}
+  .steps a {{ flex: 1 1 calc(50% - 6px); padding: 8px 10px; font-size: .9rem; }}
+  .steps small {{ display: none; }}
+  .stButton > button {{ min-height: 46px; }}
+  [data-testid="stMetric"] {{ padding: 8px 12px; }}
+  [data-testid="stMetricValue"] {{ font-size: 1.5rem; }}
+  [data-testid="stImage"] img {{ border-width: 4px; }}
+  .stApp {{ background-attachment: scroll; }}
+}}
 </style>
 """

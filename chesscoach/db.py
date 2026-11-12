@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS calibration_labels (
     labeled_at TEXT NOT NULL,
     PRIMARY KEY (game_id, ply, leak_type)
 );
+CREATE TABLE IF NOT EXISTS review_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL,
+    game_id TEXT NOT NULL,
+    ply INTEGER NOT NULL,
+    reviewed_on TEXT NOT NULL,     -- ISO date
+    grade INTEGER NOT NULL,
+    correct INTEGER                -- 1 / 0 / NULL (unknown)
+);
+CREATE INDEX IF NOT EXISTS idx_review_log_date ON review_log(reviewed_on);
 CREATE INDEX IF NOT EXISTS idx_games_status ON games(analysis_status, tc_class);
 CREATE INDEX IF NOT EXISTS idx_leaks_type ON leaks(leak_type);
 CREATE INDEX IF NOT EXISTS idx_cards_due ON srs_cards(due_date);
@@ -192,7 +202,7 @@ def delete_games_outside(conn: sqlite3.Connection, date_from: str, date_to: str,
     count = conn.execute(f"SELECT COUNT(*) FROM games WHERE {where}", params).fetchone()[0]
     if not dry_run and count:
         with conn:
-            for table in ("leaks", "srs_cards", "calibration_labels", "analysis", "moves"):
+            for table in ("leaks", "srs_cards", "calibration_labels", "analysis", "moves", "review_log"):
                 conn.execute(f"DELETE FROM {table} WHERE game_id IN (SELECT id FROM games WHERE {where})", params)
             conn.execute(f"DELETE FROM games WHERE {where}", params)
     return count

@@ -2,72 +2,102 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { --text: #222; --muted: #666; --ok: #81b64c; --bad: #e0564a; --panel: rgba(24,15,8,.55); }
-  * { box-sizing: border-box; }
+  :root { --text: #f3e9d8; --muted: #b9a888; --ok: #81b64c; --bad: #e0564a; --gold: #d9a441; --panel: rgba(24,15,8,.6); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; font-family: "Source Sans Pro", system-ui, sans-serif; color: var(--text); background: transparent; }
-  #wrap { max-width: 500px; padding: 0 10px 10px 0; }
+  #wrap { max-width: 520px; padding: 0 10px 10px 0; }
   #frame { padding: 12px; border-radius: 10px; background: linear-gradient(145deg, #4a2d18, #1f120a 70%);
            border: 1px solid rgba(217,164,65,.45); transition: box-shadow .35s;
            box-shadow: inset 0 2px 0 rgba(255,220,160,.18), inset 0 -3px 6px rgba(0,0,0,.6), 0 8px 18px rgba(0,0,0,.5); }
   #frame.ok { box-shadow: 0 0 0 3px #81b64c, 0 0 28px rgba(129,182,76,.75), 0 8px 18px rgba(0,0,0,.5); }
   #frame.bad { box-shadow: 0 0 0 3px #d93a3a, 0 0 28px rgba(217,58,58,.7), 0 8px 18px rgba(0,0,0,.5); animation: shake .35s; }
   @keyframes shake { 20% { transform: translateX(-6px); } 50% { transform: translateX(5px); } 80% { transform: translateX(-3px); } }
-  #grain { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: multiply; opacity: .55; z-index: 1; }
-  .sq svg { filter: drop-shadow(0 3px 2px rgba(0,0,0,.45)); transition: transform .12s; position: relative; z-index: 2; }
-  .sq.mine { cursor: grab; } .sq.mine:hover svg { transform: translateY(-5%) scale(1.07); }
-  .sq.sel svg { transform: translateY(-7%) scale(1.1); }
-  .sq.drop svg { animation: drop .22s ease-out; }
-  @keyframes drop { from { transform: translateY(-18%) scale(1.15); } to { transform: none; } }
   #board { position: relative; width: 100%; aspect-ratio: 1; display: grid; grid-template-columns: repeat(8, 1fr);
-           grid-template-rows: repeat(8, 1fr); border-radius: 4px; overflow: hidden; user-select: none; touch-action: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.5); }
+           grid-template-rows: repeat(8, 1fr); border-radius: 4px; overflow: hidden; user-select: none;
+           -webkit-user-select: none; touch-action: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.5); }
+  #grain { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: multiply; opacity: .55; z-index: 1; }
   .sq { position: relative; }
   .sq.light { background: #e8cfa6; } .sq.dark { background: #a5713f; }
   .sq.sel { box-shadow: inset 0 0 0 4px rgba(217,164,65,.95); }
-  .sq.last { background-image: linear-gradient(rgba(155,199,0,.41), rgba(155,199,0,.41)); }
+  .sq.last { background-image: linear-gradient(rgba(190,200,40,.45), rgba(190,200,40,.45)); }
   .sq.target::after { content: ""; position: absolute; left: 36%; top: 36%; width: 28%; height: 28%; border-radius: 50%;
                       background: rgba(30,20,10,.38); pointer-events: none; z-index: 3; }
   .sq.target.occ::after { left: 4%; top: 4%; width: 92%; height: 92%; background: none; border: 5px solid rgba(30,20,10,.4); }
-  .sq svg { width: 100%; height: 100%; display: block; pointer-events: none; }
-  .coord { position: absolute; font-size: 10px; font-weight: 700; opacity: .9; pointer-events: none; }
+  .sq svg { width: 100%; height: 100%; display: block; pointer-events: none; position: relative; z-index: 2;
+            filter: drop-shadow(0 3px 2px rgba(0,0,0,.45)); transition: transform .12s; }
+  .sq.mine { cursor: grab; }
+  @media (hover: hover) { .sq.mine:hover svg { transform: translateY(-5%) scale(1.07); } }
+  .sq.sel svg { transform: translateY(-7%) scale(1.1); }
+  .sq.drop svg { animation: drop .22s ease-out; }
+  @keyframes drop { from { transform: translateY(-18%) scale(1.15); } to { transform: none; } }
+  .coord { position: absolute; font-size: 10px; font-weight: 700; opacity: .9; pointer-events: none; z-index: 2; }
   .coord.file { right: 3px; bottom: 1px; } .coord.rank { left: 3px; top: 1px; }
   .light .coord { color: #a5713f; } .dark .coord { color: #e8cfa6; }
   #arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; }
   #ghost { position: fixed; pointer-events: none; display: none; z-index: 10; }
-  #ghost svg { width: 100%; height: 100%; }
-  #promo { position: absolute; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; gap: 8px; z-index: 5; }
-  #promo button { width: 18%; aspect-ratio: 1; border: 0; border-radius: 6px; background: #f0d9b5; cursor: pointer; padding: 2px; }
+  #ghost svg { width: 100%; height: 100%; filter: drop-shadow(0 6px 4px rgba(0,0,0,.5)); }
+  #promo { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; gap: 8px; z-index: 6; }
+  #promo button { width: 20%; aspect-ratio: 1; border: 0; border-radius: 8px; background: #e8cfa6; cursor: pointer; padding: 2px; }
   #promo button svg { width: 100%; height: 100%; }
-  #status { margin: 10px 0 4px; font-size: 16px; font-weight: 600; min-height: 24px; }
+  #status { margin: 10px 0 6px; font-size: 16px; font-weight: 700; min-height: 24px; }
   #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
-  #reveal { display: none; background: var(--panel); border-radius: 6px; padding: 8px 10px; font-size: 14px; line-height: 1.45; }
-  #reveal .row { display: flex; gap: 8px; align-items: baseline; }
-  #reveal .mv { font-weight: 700; min-width: 64px; }
-  #reveal .win { min-width: 52px; font-variant-numeric: tabular-nums; }
-  #reveal .pv { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #reveal .tag { font-size: 12px; padding: 0 6px; border-radius: 8px; color: #fff; white-space: nowrap; flex-shrink: 0; }
-  .tag.ok { background: #5d8a34; } .tag.bad { background: #b23a30; }
-  #reveal hr { border: 0; border-top: 1px solid rgba(127,127,127,.35); margin: 6px 0; }
+
+  #reveal { display: none; }
+  #nav { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+  #nav button { min-width: 46px; height: 44px; border-radius: 8px; border: 1px solid rgba(0,0,0,.4); font-size: 18px;
+                font-weight: 800; color: var(--text); background: linear-gradient(180deg, #6b4728, #4c3019);
+                box-shadow: 0 3px 0 #2a190d; cursor: pointer; }
+  #nav button:active { transform: translateY(2px); box-shadow: 0 1px 0 #2a190d; }
+  #nav button:disabled { opacity: .4; cursor: default; }
+  #moves { flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; padding: 4px 8px; border-radius: 8px;
+           background: var(--panel); border: 1px solid rgba(217,164,65,.2); max-height: 68px; overflow-y: auto; }
+  #moves span { padding: 1px 3px; border-radius: 4px; cursor: pointer; white-space: nowrap; display: inline-block; }
+  #moves span.cur { background: var(--gold); color: #24160c; font-weight: 700; }
+  #lines { background: var(--panel); border: 1px solid rgba(217,164,65,.2); border-radius: 8px; overflow: hidden; }
+  .row { display: flex; gap: 8px; align-items: center; padding: 9px 10px; cursor: pointer; font-size: 14px;
+         border-left: 4px solid transparent; }
+  .row + .row { border-top: 1px solid rgba(217,164,65,.14); }
+  .row.cur { background: rgba(217,164,65,.16); border-left-color: var(--gold); }
+  .row .mv { font-weight: 800; min-width: 58px; }
+  .row .win { min-width: 50px; font-variant-numeric: tabular-nums; }
+  .row .tag { font-size: 12px; padding: 1px 7px; border-radius: 9px; color: #fff; white-space: nowrap; }
+  .tag.ok { background: #5d8a34; } .tag.bad { background: #b23a30; } .tag.you { background: #7a5a2a; }
+  .row .hint { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+  @media (max-width: 420px) {
+    #wrap { padding-right: 0; } #frame { padding: 6px; border-radius: 8px; }
+    .row .hint { display: none; } .coord { font-size: 8px; }
+  }
 </style>
 </head>
 <body>
 <div id="wrap">
   <div id="frame"><div id="board"><div id="grain"></div><svg id="arrows" viewBox="0 0 8 8"></svg><div id="promo"></div></div></div>
   <div id="status"></div>
-  <div id="reveal"></div>
+  <div id="reveal">
+    <div id="nav">
+      <button id="first" title="Back to the position">⏮</button>
+      <button id="prev" title="Previous move (←)">◀</button>
+      <button id="next" title="Next move (→)">▶</button>
+      <div id="moves"></div>
+    </div>
+    <div id="lines"></div>
+  </div>
 </div>
 <div id="ghost"></div>
 <script>
 // Minimal Streamlit component protocol (no build step, no CDN).
 const send = (type, data) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, data || {}), "*");
-const setHeight = () => send("streamlit:setFrameHeight", {height: document.getElementById("wrap").offsetHeight + 6});
+const setHeight = () => send("streamlit:setFrameHeight", {height: document.getElementById("wrap").offsetHeight + 8});
 const setValue = (value) => send("streamlit:setComponentValue", {value, dataType: "json"});
 
 const FILES = "abcdefgh";
-const boardEl = document.getElementById("board"), arrowsEl = document.getElementById("arrows"),
-      statusEl = document.getElementById("status"), revealEl = document.getElementById("reveal"),
-      promoEl = document.getElementById("promo"), ghostEl = document.getElementById("ghost"),
-      grainEl = document.getElementById("grain"), frameEl = document.getElementById("frame");
+const $ = (id) => document.getElementById(id);
+const boardEl = $("board"), arrowsEl = $("arrows"), statusEl = $("status"), revealEl = $("reveal"),
+      promoEl = $("promo"), ghostEl = $("ghost"), grainEl = $("grain"), frameEl = $("frame"),
+      linesEl = $("lines"), movesEl = $("moves");
+
 // Wood grain over the squares: stretched fractal noise, generated in the browser.
 grainEl.style.backgroundImage = "url('data:image/svg+xml;base64," + btoa(
   "<svg xmlns='http://www.w3.org/2000/svg' width='480' height='480'><filter id='g' x='0' y='0' width='100%' height='100%'>" +
@@ -75,26 +105,28 @@ grainEl.style.backgroundImage = "url('data:image/svg+xml;base64," + btoa(
   "<feColorMatrix values='0 0 0 0 .35  0 0 0 0 .2  0 0 0 0 .08  1.7 0 0 0 -.55'/></filter>" +
   "<rect width='100%' height='100%' filter='url(#g)'/></svg>") + "')";
 
-let A = null;            // args from Python
+let A = null;                 // args from Python
 let puzzleId = null;
-let pos = {};            // square -> piece letter
+let pos = {};                 // square -> piece letter (what is on screen)
 let selected = null, answered = false, lastMove = null, drag = null;
+let answerUci = null;         // the move I tried
+let viewLine = 0, viewPly = 0; // replay cursor after the reveal (ply 0 = the puzzle position)
 
 const svgPiece = (p) => `<svg viewBox="0 0 45 45">${A.pieces[p]}</svg>`;
 const isMine = (p) => p && ((A.orientation === "white") === (p === p.toUpperCase()));
+const allLines = () => A.lines.concat([A.played]);
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
 
 function parseFen(fen) {
   const out = {}, rows = fen.split(" ")[0].split("/");
   rows.forEach((row, r) => {
     let f = 0;
-    for (const ch of row) {
-      if (/\d/.test(ch)) f += +ch; else { out[FILES[f] + (8 - r)] = ch; f++; }
-    }
+    for (const ch of row) { if (/\d/.test(ch)) f += +ch; else { out[FILES[f] + (8 - r)] = ch; f++; } }
   });
   return out;
 }
 
-function squares() {   // in display order (top-left first)
+function squares() {          // display order, top-left first
   const list = [];
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
     const file = A.orientation === "white" ? f : 7 - f, rank = A.orientation === "white" ? 8 - r : r + 1;
@@ -103,7 +135,7 @@ function squares() {   // in display order (top-left first)
   return list;
 }
 
-function xy(sq) {      // centre of a square in board units (0..8)
+function xy(sq) {             // centre of a square in board units (0..8)
   const f = FILES.indexOf(sq[0]), r = +sq[1];
   return A.orientation === "white" ? [f + .5, 8 - r + .5] : [7 - f + .5, r - .5];
 }
@@ -118,8 +150,8 @@ function draw() {
     el.dataset.sq = sq;
     if (sq === selected) el.classList.add("sel");
     if (!answered && isMine(pos[sq])) el.classList.add("mine");
-    if (lastMove && sq === lastMove.slice(2, 4)) el.classList.add("drop");
     if (lastMove && (sq === lastMove.slice(0, 2) || sq === lastMove.slice(2, 4))) el.classList.add("last");
+    if (lastMove && sq === lastMove.slice(2, 4)) el.classList.add("drop");
     if (targets.includes(sq)) el.classList.add("target", ...(pos[sq] ? ["occ"] : []));
     let html = pos[sq] && !(drag && drag.moved && drag.from === sq) ? svgPiece(pos[sq]) : "";
     if (i % 8 === 0) html += `<span class="coord rank">${sq[1]}</span>`;
@@ -133,11 +165,11 @@ function arrow(uci, color, width) {
   const [x1, y1] = xy(uci.slice(0, 2)), [x2, y2] = xy(uci.slice(2, 4));
   const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
   const head = .34, ex = x2 - ux * head, ey = y2 - uy * head, px = -uy * head * .55, py = ux * head * .55;
-  return `<g opacity=".8"><line x1="${x1}" y1="${y1}" x2="${ex}" y2="${ey}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>` +
+  return `<g opacity=".85"><line x1="${x1}" y1="${y1}" x2="${ex}" y2="${ey}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>` +
          `<polygon points="${x2},${y2} ${ex + px},${ey + py} ${ex - px},${ey - py}" fill="${color}"/></g>`;
 }
 
-function applyMove(uci) {
+function applyMove(uci) {     // only used for the single move I make on the puzzle position
   const from = uci.slice(0, 2), to = uci.slice(2, 4), piece = pos[from];
   if (piece.toLowerCase() === "p" && from[0] !== to[0] && !pos[to]) delete pos[to[0] + from[1]];   // en passant
   if (piece.toLowerCase() === "k" && Math.abs(FILES.indexOf(from[0]) - FILES.indexOf(to[0])) === 2) { // castling
@@ -149,28 +181,68 @@ function applyMove(uci) {
   lastMove = uci;
 }
 
-function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c])); }
-
-function reveal(uci) {
-  const correct = A.accepted.includes(uci);
-  const san = (A.legal.find((m) => m.uci === uci) || {}).san || uci;
-  const known = A.lines.find((l) => l.uci === uci) || (A.played.uci === uci ? A.played : null);
-  statusEl.className = correct ? "ok" : "bad";
-  statusEl.textContent = correct ? `Correct: ${san}` :
-    `Not this time: ${san}` + (known ? ` (${known.win}%)` : " is outside the engine's top moves");
-  let html = A.lines.map((l) =>
-    `<div class="row"><span class="mv">${esc(l.san)}</span><span class="win">${l.win}%</span>` +
-    `<span class="tag ${l.ok ? "ok" : "bad"}">${l.ok ? "accepted" : "too weak"}</span><span class="pv">${esc(l.pv)}</span></div>`).join("");
-  html += `<hr><div class="row"><span class="mv">${esc(A.played.san)}</span><span class="win">${A.played.win}%</span>` +
-          `<span class="tag bad">played in the game</span><span class="pv">${esc(A.played.pv)}</span></div>`;
-  revealEl.innerHTML = html;
-  revealEl.style.display = "block";
-  let arrows = arrow(A.played.uci, "#d93a3a", .13);
-  A.lines.filter((l) => l.ok).forEach((l, i) => { arrows += arrow(l.uci, "#81b64c", i === 0 ? .2 : .13); });
-  arrowsEl.innerHTML = arrows;
-  return correct;
+// ---- reveal + replay -------------------------------------------------------------------
+function show() {             // paint the replay cursor
+  const line = allLines()[viewLine];
+  viewPly = Math.max(0, Math.min(viewPly, line.fens.length));
+  if (viewPly === 0) {
+    pos = parseFen(A.fen); lastMove = null;
+    let arrows = arrow(A.played.uci, "#d93a3a", .13);
+    A.lines.filter((l) => l.ok).forEach((l, i) => { arrows += arrow(l.uci, "#81b64c", i === 0 ? .2 : .13); });
+    arrowsEl.innerHTML = arrows;
+  } else {
+    pos = parseFen(line.fens[viewPly - 1]); lastMove = line.ucis[viewPly - 1];
+    arrowsEl.innerHTML = "";
+  }
+  draw();
+  linesEl.innerHTML = allLines().map((l, i) => {
+    const mine = i === A.lines.length;
+    const tag = mine ? '<span class="tag you">played in the game</span>'
+                     : `<span class="tag ${l.ok ? "ok" : "bad"}">${l.ok ? "accepted" : "too weak"}</span>`;
+    return `<div class="row${i === viewLine ? " cur" : ""}" data-i="${i}"><span class="mv">${esc(l.san)}</span>` +
+           `<span class="win">${l.win}%</span>${tag}<span class="hint">${i === viewLine ? "use ◀ ▶" : "tap to replay"}</span></div>`;
+  }).join("");
+  movesEl.innerHTML = line.sans.map((s, i) => `<span data-p="${i + 1}" class="${i + 1 === viewPly ? "cur" : ""}">${esc(s)}</span>`).join(" ");
+  const cur = movesEl.querySelector(".cur"); if (cur) cur.scrollIntoView({block: "nearest"});
+  $("first").disabled = $("prev").disabled = viewPly === 0;
+  $("next").disabled = viewPly >= line.fens.length;
+  setHeight();
 }
 
+function reveal() {
+  answered = true; selected = null;
+  revealEl.style.display = "block";
+  if (answerUci !== null) {
+    const correct = A.accepted.includes(answerUci);
+    const san = (A.legal.find((m) => m.uci === answerUci) || {}).san || answerUci;
+    const known = A.lines.find((l) => l.uci === answerUci) || (A.played.uci === answerUci ? A.played : null);
+    statusEl.className = correct ? "ok" : "bad";
+    statusEl.textContent = correct ? `Correct: ${san}` :
+      `Not this time: ${san}` + (known ? ` (${known.win}%)` : " is outside the engine's top moves");
+    frameEl.className = correct ? "ok" : "bad";
+    // After a miss, open on the game move so the refutation is one tap away.
+    viewLine = correct ? Math.max(0, A.lines.findIndex((l) => l.uci === answerUci)) : A.lines.length;
+  } else {
+    statusEl.className = ""; statusEl.textContent = A.prompt || "";
+    viewLine = A.lines.length;
+  }
+  viewPly = 0;
+  show();
+}
+
+function step(delta) { if (answered) { viewPly += delta; show(); } }
+$("first").onclick = () => { viewPly = 0; show(); };
+$("prev").onclick = () => step(-1);
+$("next").onclick = () => step(1);
+linesEl.onclick = (e) => { const r = e.target.closest(".row"); if (r) { viewLine = +r.dataset.i; viewPly = 1; show(); } };
+movesEl.onclick = (e) => { const s = e.target.closest("span"); if (s) { viewPly = +s.dataset.p; show(); } };
+document.addEventListener("keydown", (e) => {
+  if (!answered) return;
+  if (e.key === "ArrowLeft") { step(-1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { step(1); e.preventDefault(); }
+});
+
+// ---- answering -------------------------------------------------------------------------
 function tryMove(from, to) {
   const cands = A.legal.filter((m) => m.uci.slice(0, 4) === from + to);
   if (!cands.length) return false;
@@ -189,12 +261,11 @@ function tryMove(from, to) {
 
 function commit(uci) {
   if (answered) return;
-  answered = true; selected = null;
-  applyMove(uci);
-  draw();
-  const correct = reveal(uci);
+  answerUci = uci;
+  applyMove(uci); answered = true; selected = null; draw();   // show my move landing...
+  const correct = A.accepted.includes(uci);
   frameEl.className = correct ? "ok" : "bad";
-  setHeight();
+  setTimeout(reveal, 650);                                     // ...then the solution
   // One message to Python so the grade buttons can appear; the check itself ran here, client side.
   setValue({puzzle: puzzleId, uci, correct});
 }
@@ -213,24 +284,24 @@ boardEl.addEventListener("pointerdown", (e) => {
   if (isMine(pos[sq])) {
     selected = sq;
     drag = {from: sq, moved: false, x: e.clientX, y: e.clientY};
-    boardEl.setPointerCapture(e.pointerId);
+    try { boardEl.setPointerCapture(e.pointerId); } catch (err) {}
   } else selected = null;
   draw();
 });
 
 boardEl.addEventListener("pointermove", (e) => {
   if (!drag) return;
-  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) {
+  const size = boardEl.clientWidth / 8;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 6) {
     drag.moved = true;
-    const size = boardEl.clientWidth / 8;
-    ghostEl.style.width = ghostEl.style.height = size + "px";
+    ghostEl.style.width = ghostEl.style.height = size * 1.25 + "px";   // a bit larger, visible under a finger
     ghostEl.innerHTML = svgPiece(pos[drag.from]);
     ghostEl.style.display = "block";
     draw();
   }
   if (drag.moved) {
-    const size = boardEl.clientWidth / 8;
-    ghostEl.style.left = e.clientX - size / 2 + "px"; ghostEl.style.top = e.clientY - size / 2 + "px";
+    const lift = e.pointerType === "touch" ? size * .9 : 0;
+    ghostEl.style.left = e.clientX - size * .625 + "px"; ghostEl.style.top = e.clientY - size * .625 - lift + "px";
   }
 });
 
@@ -248,9 +319,7 @@ boardEl.addEventListener("pointercancel", endDrag);
 
 function applyTheme(theme) {
   if (!theme) return;
-  const s = document.documentElement.style;
-  s.setProperty("--text", theme.textColor || "#222");
-  s.setProperty("--muted", theme.base === "dark" ? "#aaa" : "#666");
+  if (theme.textColor) document.documentElement.style.setProperty("--text", theme.textColor);
   if (theme.font) document.body.style.fontFamily = theme.font;
 }
 
@@ -261,11 +330,12 @@ window.addEventListener("message", (e) => {
   if (args.puzzle_id !== puzzleId) {                     // new puzzle: reset client state
     A = args; puzzleId = args.puzzle_id;
     pos = parseFen(A.fen);
-    selected = null; answered = false; lastMove = null; drag = null;
+    selected = null; answered = false; lastMove = null; drag = null; answerUci = null; viewLine = 0; viewPly = 0;
     arrowsEl.innerHTML = ""; revealEl.style.display = "none"; promoEl.style.display = "none";
     statusEl.className = ""; frameEl.className = "";
     statusEl.textContent = (A.orientation === "white" ? "White" : "Black") + " to move. " + (A.prompt || "");
     draw();
+    if (A.mode === "view") reveal();                     // browsing a leak: no question, straight to replay
   }
   setHeight();
 });

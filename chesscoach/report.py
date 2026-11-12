@@ -66,7 +66,7 @@ def load_leaks(conn: sqlite3.Connection) -> pd.DataFrame:
            FROM leaks l JOIN games g ON g.id = l.game_id""", conn)
     if df.empty:
         return df
-    key = df["leak_type"] + df["sub_type"].map(lambda s: f":{s}" if s else "")
+    key = df["leak_type"] + df["sub_type"].map(lambda s: f":{s}" if isinstance(s, str) and s else "")
     df["label"] = key.map(LEAK_LABELS).fillna(key)
     df["opening_family"] = df["opening"].map(opening_family)
     df["month"] = df["date"].fillna("").str[:7].replace("", "unknown")
@@ -119,6 +119,51 @@ def monthly_trend(leaks: pd.DataFrame, moves: pd.DataFrame) -> pd.DataFrame:
                                                  aggfunc="count", fill_value=0)
     counts = counts.reindex(denom.index, fill_value=0)
     return (100 * counts.div(denom, axis=0)).round(2).drop(index="unknown", errors="ignore").sort_index()
+
+
+def headlines(leaks: pd.DataFrame, moves: pd.DataFrame, min_moves: int = 60) -> list[str]:
+    """Plain-number findings worth acting on (rule based, no text generation)."""
+    out: list[str] = []
+    if leaks.empty or moves.empty:
+        return out
+    games = moves["game_id"].nunique()
+    by_label = leaks.groupby("label").agg(n=("ply", "size"), cost=("win_drop", "sum")).sort_values("cost", ascending=False)
+    top = by_label.iloc[0]
+    out.append(f"**Most expensive leak: {by_label.index[0]}** — {int(top.n)} of {len(leaks)} leaks, "
+               f"{top.cost / games:.1f} win % lost per game on average.")
+
+    def rate(df_l: pd.DataFrame, df_m: pd.DataFrame, column: str) -> pd.Series:
+        m = df_m.groupby(column).size()
+        m = m[m >= min_moves]
+        return (100 * df_l.groupby(column).size().reindex(m.index, fill_value=0) / m).sort_values(ascending=False)
+
+    tt = rate(leaks, moves, "time_trouble")
+    if {"yes", "no"} <= set(tt.index) and tt["no"] > 0:
+        ratio = tt["yes"] / tt["no"]
+        if ratio >= 1.3:
+            out.append(f"**Time trouble multiplies leaks ×{ratio:.1f}** — {tt['yes']:.1f} vs {tt['no']:.1f} per 100 moves.")
+        elif ratio <= 0.8:
+            out.append(f"**Leaks are not a clock problem** — {tt['no']:.1f} per 100 moves with time, "
+                       f"{tt['yes']:.1f} in time trouble.")
+    ph = rate(leaks, moves, "phase")
+    if len(ph) >= 2 and ph.iloc[0] > 0:
+        out.append(f"**Weakest phase: {ph.index[0]}** — {ph.iloc[0]:.1f} leaks per 100 moves "
+                   f"(vs {ph.iloc[-1]:.1f} in the {ph.index[-1]}).")
+    col = rate(leaks, moves, "my_color")
+    if len(col) == 2 and col.iloc[1] > 0 and col.iloc[0] / col.iloc[1] >= 1.3:
+        out.append(f"**More leaks as {col.index[0].capitalize()}** — {col.iloc[0]:.1f} vs {col.iloc[1]:.1f} per 100 moves.")
+    months = moves[moves["month"] != "unknown"].groupby("month").size()
+    months = months[months >= min_moves].sort_index()
+    if len(months) >= 4:
+        lm = leaks.groupby("month").size().reindex(months.index, fill_value=0)
+        recent, before = months.index[-2:], months.index[:-2]
+        r_new, r_old = 100 * lm[recent].sum() / months[recent].sum(), 100 * lm[before].sum() / months[before].sum()
+        if r_old > 0:
+            change = 100 * (r_new - r_old) / r_old
+            word = "down" if change < 0 else "up"
+            out.append(f"**Trend: {word} {abs(change):.0f}%** — {r_new:.2f} leaks per 100 moves in the last two "
+                       f"months vs {r_old:.2f} before.")
+    return out
 
 
 def precision_table(conn: sqlite3.Connection) -> pd.DataFrame:

@@ -40,3 +40,23 @@ def test_pipeline_from_analysis_to_report_frames():
     # one SRS card for the position, and the game is no longer pending
     assert conn.execute("SELECT COUNT(*) FROM srs_cards").fetchone()[0] == 1
     assert db.pending_games(conn, ["rapid"]) == []
+
+
+def test_labels_with_mixed_leak_types_and_headlines():
+    import pandas as pd
+    conn = db.connect(":memory:")
+    importer.import_pgn_text(conn, GOOD_PGN, {"who_carezz"})
+    gid = "chesscom:live:123456"
+    common = dict(game_id=gid, refutation_ply=None, win_drop=20.0, phase="opening", time_trouble="no",
+                  fen_before="8/8/8/8/8/8/8/K6k w - - 0 1", my_move="a1a2", best_move="a1b1")
+    from chesscoach.models import LeakFinding
+    db.replace_leaks(conn, None, [LeakFinding(ply=4, leak_type="forcing_bias", sub_type=None, **common),
+                                  LeakFinding(ply=2, leak_type="horizon", sub_type="material", **common)], "2024-03-01")
+    lk = report.load_leaks(conn)
+    assert sorted(lk["label"]) == ["Forcing bias", "Horizon (material)"]      # no "forcing_bias:nan"
+
+    moves = pd.DataFrame({"game_id": [gid] * 200, "phase": ["opening"] * 100 + ["endgame"] * 100,
+                          "time_trouble": ["no"] * 200, "my_color": ["white"] * 200, "month": ["2024-03"] * 200})
+    notes = report.headlines(lk, moves)
+    assert notes[0].startswith("**Most expensive leak")
+    assert any("Weakest phase: opening" in n for n in notes)

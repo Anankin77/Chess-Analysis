@@ -27,7 +27,7 @@ MULTIPV_COUNT = 3
 MIN_PV_LENGTH = 8
 ENGINE_THREADS = 1  # per worker process
 ENGINE_HASH_MB = 64  # per worker process
-COMMIT_BATCH_SIZE = 5  # games per SQLite commit in the batch runner
+COMMIT_BATCH_SIZE = 2  # games per SQLite commit in the batch runner
 
 # --- Leak thresholds (win % points) -----------------------------------------
 WIN_PCT_BLUNDER_DROP = 10.0

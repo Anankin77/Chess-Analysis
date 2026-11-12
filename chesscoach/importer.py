@@ -111,7 +111,7 @@ def _int_or_none(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def game_to_record(game: chess.pgn.Game, usernames: set[str]) -> GameRecord:
+def game_to_record(game: chess.pgn.Game, usernames: set[str], force_color: Optional[str] = None) -> GameRecord:
     """Convert a parsed PGN game. Raises ValueError for anything we skip."""
     if game.errors:
         raise ValueError(f"corrupt PGN: {game.errors[0]}")
@@ -120,7 +120,7 @@ def game_to_record(game: chess.pgn.Game, usernames: set[str]) -> GameRecord:
     if variant not in ("standard", "chess", "from position") or "FEN" in h or h.get("SetUp") == "1":
         raise ValueError(f"non-standard game (variant={h.get('Variant')!r}, custom FEN={'FEN' in h})")
     white, black = h.get("White", "?"), h.get("Black", "?")
-    my_color = determine_color(white, black, usernames)
+    my_color = determine_color(white, black, usernames) or force_color
     if my_color is None:
         raise ValueError(f"none of {sorted(usernames)} is playing ({white} vs {black})")
 
@@ -188,6 +188,8 @@ def iter_pgn_games(text: str) -> Iterator[chess.pgn.Game]:
 class ImportStats:
     def __init__(self) -> None:
         self.imported = self.existing = self.skipped = self.aborted = self.filtered = 0
+        self.ids: list[str] = []  # games seen in this import (new or already stored)
+        self.problems: list[str] = []
 
     def __repr__(self) -> str:
         return (f"imported={self.imported} already_present={self.existing} "
@@ -195,22 +197,26 @@ class ImportStats:
 
 
 def import_pgn_text(conn: sqlite3.Connection, text: str, usernames: Optional[set[str]] = None,
-                    stats: Optional[ImportStats] = None, known: Optional[set[str]] = None) -> ImportStats:
-    """Import every game in `text`. Corrupt or foreign games are logged and skipped."""
+                    stats: Optional[ImportStats] = None, known: Optional[set[str]] = None,
+                    force_color: Optional[str] = None) -> ImportStats:
+    """Import every game in `text`. Corrupt or foreign games are logged and skipped.
+    `force_color` ("white"/"black") is used when no configured username is playing."""
     usernames = usernames or my_usernames()
     stats = stats or ImportStats()
     known = db.existing_game_ids(conn) if known is None else known
     records: list[GameRecord] = []
     for game in iter_pgn_games(text):
         try:
-            rec = game_to_record(game, usernames)
+            rec = game_to_record(game, usernames, force_color)
         except NoMoves:
             stats.aborted += 1
             continue
         except Exception as exc:
             stats.skipped += 1
+            stats.problems.append(str(exc))
             log.warning("Skipping game %s: %s", game.headers.get("Link") or game.headers.get("Site", "?"), exc)
             continue
+        stats.ids.append(rec.id)
         if rec.id in known:
             stats.existing += 1
             continue

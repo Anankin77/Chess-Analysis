@@ -128,7 +128,7 @@ A step bar on top follows the workflow: **Import → Analyze → Report → Trai
 | 1 · Import & analyze | Choose dates and time formats, import from Chess.com, **Start / Stop analysis** with a live progress bar. Also: remove unwanted games, upload PGN, terminal command. |
 | 2 · Leak report | Headline findings, top 3 patterns with boards, breakdown by leak type / phase / time control / time trouble, monthly trend, and a browser to replay every leak. Filters: time control, colour, opening, result, dates. |
 | 3 · Trainer | Your leak positions as SM-2 cards. Move, then replay the engine lines and the refutation of your game move with ◀ ▶. Shows today's count, day streak and 30-day accuracy per leak type. |
-| Game review | One game start to end: fetch your newest games, analyze one in about a minute, then lessons, a win % chart and every move graded with the engine's plan in words. |
+| Game review | One game start to end: fetch your newest games or paste a PGN, analyze it in about a minute, then lessons, a win % chart and every move graded with the engine's plan in words. |
 | Find the quiet move | Same drill, forcing-bias positions only. |
 | Calibration | Judge 20 random flagged positions as Valid / False positive; precision per leak type shows which threshold to tune. |
 

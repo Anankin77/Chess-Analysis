@@ -453,6 +453,27 @@ def game_moments(game_id: str) -> None:
             st.caption(f"Engine's plan from here: {m['plan']}.")
 
 
+def _paste_pgn() -> None:
+    """Button callback: store the pasted game and select it for review."""
+    ss = st.session_state
+    text = (ss.get("paste_pgn") or "").strip()
+    if not text:
+        ss["paste_msg"] = ("error", "Paste a PGN first.")
+        return
+    side = {"White": "white", "Black": "black"}.get(ss.get("paste_side"))
+    stats = importer.import_pgn_text(get_conn(), text, importer.my_usernames(), force_color=side)
+    if stats.ids:
+        ss["game_fmt"], ss["game_pick"], ss["paste_pgn"] = "any", stats.ids[-1], ""
+        extra = f" ({len(stats.ids)} games in the paste; showing the last)" if len(stats.ids) > 1 else ""
+        ss["paste_msg"] = ("ok", ("Game added." if stats.imported else "That game was already stored.") + extra)
+    elif stats.aborted:
+        ss["paste_msg"] = ("error", "That PGN has no moves.")
+    else:
+        why = stats.problems[0] if stats.problems else "no game found in the text"
+        hint = " Choose the side you played and try again." if "is playing" in why else ""
+        ss["paste_msg"] = ("error", f"Could not read it: {why}.{hint}")
+
+
 def page_game() -> None:
     conn = get_conn()
     st.title("Game review")
@@ -471,11 +492,22 @@ def page_game() -> None:
                 st.toast(f"{stats.imported} new games")
             except Exception as exc:
                 st.error(f"Chess.com import failed: {exc}")
+    with st.expander("📋 Paste a PGN", expanded=bool(st.session_state.get("paste_pgn"))):
+        st.text_area("PGN", key="paste_pgn", height=160, label_visibility="collapsed",
+                     placeholder="Paste the PGN here (Chess.com: Share → PGN → copy)")
+        a, b = st.columns([2, 1])
+        a.radio("I played", ["Detect from username", "White", "Black"], horizontal=True, key="paste_side",
+                help=f"Detection looks for {config.CHESSCOM_USERNAME} in the White/Black tags.")
+        b.button("Add this game", type="primary", width="stretch", on_click=_paste_pgn)
+    kind, msg = st.session_state.pop("paste_msg", (None, None))
+    if kind:
+        (st.success if kind == "ok" else st.error)(msg)
+
     sql = "SELECT * FROM games WHERE tc_class != 'daily'" + ("" if fmt == "any" else " AND tc_class = ?")
     games = conn.execute(sql + " ORDER BY date DESC, CAST(SUBSTR(id, INSTR(id, ':') + 6) AS INTEGER) DESC, id DESC LIMIT 80",
                          [] if fmt == "any" else [fmt]).fetchall()
-    if not games:
-        st.info("No stored games of this format yet. Fetch your newest games above, or use the Import page.")
+    if not games and not st.session_state.get("game_pick"):
+        st.info("No stored games of this format yet. Fetch your newest games or paste a PGN above.")
         return
 
     def game_label(g) -> str:
@@ -483,6 +515,13 @@ def page_game() -> None:
         return f"{g['date']} · {g['tc_class']} · {g['my_color']} vs {opp} · {g['result']}"
 
     by_id = {g["id"]: g for g in games}
+    picked = st.session_state.get("game_pick")
+    if picked and picked not in by_id:               # e.g. a pasted game without date or time control
+        row = conn.execute("SELECT * FROM games WHERE id=?", (picked,)).fetchone()
+        if row and (fmt == "any" or row["tc_class"] == fmt):
+            by_id = {picked: row, **by_id}
+        else:
+            st.session_state.pop("game_pick", None)
     gid = st.selectbox("Game", list(by_id), format_func=lambda i: game_label(by_id[i]), key="game_pick")
     game = by_id[gid]
 
@@ -754,7 +793,13 @@ def page_import() -> None:
                 st.toast(f"Removed {removed} games")
                 st.rerun()
 
-    with st.expander("Upload a PGN file instead"):
+    with st.expander("Paste or upload PGN instead"):
+        pasted = st.text_area("Paste PGN (one or many games)", height=140, key="import_paste")
+        if st.button("Import pasted PGN", disabled=not pasted.strip()):
+            stats = importer.import_pgn_text(conn, pasted, importer.my_usernames([user]))
+            st.write(f"Pasted text: {stats}")
+            if stats.problems:
+                st.caption("First problem: " + stats.problems[0])
         files = st.file_uploader("PGN files", type=["pgn"], accept_multiple_files=True)
         if files and st.button("Import PGN"):
             names = importer.my_usernames([user])

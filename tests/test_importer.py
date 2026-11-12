@@ -223,3 +223,19 @@ def test_delete_games_outside_selection():
     assert conn.execute("SELECT COUNT(*) FROM moves WHERE game_id LIKE '%daily%'").fetchone()[0] == 0
     assert db.pending_games(conn, ["rapid"], date_from="2024-03-02") == []
     assert len(db.pending_games(conn, ["rapid"], date_from="2024-03-01", date_to="2024-03-01")) == 1
+
+
+def test_pasted_pgn_without_my_username_needs_a_side():
+    conn = db.connect(":memory:")
+    stats = importer.import_pgn_text(conn, FOREIGN_PGN, {"who_carezz"})
+    assert (stats.imported, stats.ids) == (0, []) and "is playing" in stats.problems[0]
+    stats = importer.import_pgn_text(conn, FOREIGN_PGN, {"who_carezz"}, force_color="black")
+    assert stats.imported == 1 and len(stats.ids) == 1
+    g = conn.execute("SELECT my_color, result FROM games WHERE id=?", (stats.ids[0],)).fetchone()
+    assert (g["my_color"], g["result"]) == ("black", "draw")
+    # a username match always wins over the forced side
+    stats = importer.import_pgn_text(conn, GOOD_PGN, {"who_carezz"}, force_color="black")
+    assert conn.execute("SELECT my_color FROM games WHERE id=?", (stats.ids[0],)).fetchone()[0] == "white"
+    # bare move text without any tags works too
+    stats = importer.import_pgn_text(conn, "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6", {"who_carezz"}, force_color="white")
+    assert stats.imported == 1

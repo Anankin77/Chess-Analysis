@@ -172,7 +172,7 @@ def leak_browser(lk: pd.DataFrame) -> None:
     })
     left, right = st.columns([3, 2])
     with left:
-        event = st.dataframe(table, hide_index=True, use_container_width=True, height=420,
+        event = st.dataframe(table, hide_index=True, width="stretch", height=420,
                              on_select="rerun", selection_mode="single-row", key="leak_table")
         st.caption(f"Showing {len(view)} of {len(lk)} leaks. Select a row to replay it.")
     rows = event.selection.rows if event and event.selection else []
@@ -239,7 +239,7 @@ def page_report() -> None:
                     .sort_values("win_drop", ascending=False).head(3))
         for col, ex in zip(st.columns(3), examples.itertuples()):
             with col:
-                st.image(board_svg(ex.fen_before, ex.my_move, ex.best_move), use_container_width=True)
+                st.image(board_svg(ex.fen_before, ex.my_move, ex.best_move), width="stretch")
                 caption = (f"Played {move_label(ex.fen_before, ex.my_move)} (red), best "
                            f"{san(ex.fen_before, ex.best_move)} (green) · −{ex.win_drop:.0f} win %")
                 if pd.notna(ex.refutation_ply):
@@ -251,7 +251,7 @@ def page_report() -> None:
         columns={"avg": "Avg win % lost"}).round(1).sort_values("Leaks", ascending=False)
     left, right = st.columns([3, 2])
     left.bar_chart(by_type["Leaks"], horizontal=True, y_label="", x_label="Leaks by type")
-    right.dataframe(by_type, use_container_width=True)
+    right.dataframe(by_type, width="stretch")
 
     tt_leaks, tt_moves = lk[lk["time_trouble"] != "unknown"], moves[moves["time_trouble"] != "unknown"]
     tabs = st.tabs(["Phase", "Time control", "Time trouble"])
@@ -269,7 +269,7 @@ def page_report() -> None:
             table = report.breakdown(l_df, m_df, column)
             a, b = st.columns([2, 3])
             a.bar_chart(table["Leaks per 100 moves"], y_label="Leaks per 100 moves", x_label="")
-            b.dataframe(table, use_container_width=True)
+            b.dataframe(table, width="stretch")
             if note:
                 st.caption(note)
 
@@ -374,7 +374,7 @@ def _training_ui(mode: str, leak_type: str | None, prompt: str, allow_ahead_defa
         cols = st.columns(4)
         for col, (name, grade) in zip(cols, trainer.GRADES.items()):
             # A wrong answer can only be graded Again or Hard.
-            if col.button(name, key=f"{mode}_grade_{grade}", use_container_width=True,
+            if col.button(name, key=f"{mode}_grade_{grade}", width="stretch",
                           disabled=(not correct and grade > 3),
                           type="primary" if (grade == 4 if correct else grade == 1) else "secondary"):
                 new = trainer.review(conn, card["id"], grade, correct=correct)
@@ -436,7 +436,7 @@ def game_moments(game_id: str) -> None:
     })
     left, right = st.columns([3, 2])
     with left:
-        event = st.dataframe(table, hide_index=True, use_container_width=True, height=min(460, 38 * len(shown) + 40),
+        event = st.dataframe(table, hide_index=True, width="stretch", height=min(460, 38 * len(shown) + 40),
                              on_select="rerun", selection_mode="single-row", key=f"moves_{game_id}_{key_only}")
         st.caption("Select a move to see it on the board.")
     rows = event.selection.rows if event and event.selection else []
@@ -461,7 +461,7 @@ def page_game() -> None:
 
     c1, c2, c3 = st.columns([2, 2, 3])
     fmt = c1.selectbox("Format", ["rapid", "blitz", "bullet", "any"], key="game_fmt")
-    if c2.button("⬇ Fetch my newest games", use_container_width=True,
+    if c2.button("⬇ Fetch my newest games", width="stretch",
                  help="Downloads the last 35 days from Chess.com (all formats except daily)."):
         today = date.today()
         with st.spinner("Asking Chess.com…"):
@@ -567,7 +567,7 @@ def page_calibration() -> None:
     st.subheader("Precision per leak type")
     table = report.precision_table(conn)
     table["If precision is low, try"] = table["Leak type"].map(TUNING_HINTS)
-    st.dataframe(table, hide_index=True, use_container_width=True,
+    st.dataframe(table, hide_index=True, width="stretch",
                  column_config={"Precision": st.column_config.NumberColumn(format="%.1f %%")})
     a, b, _ = st.columns([1, 1, 2])
     if a.button("Re-run detection", help="Re-detect leaks from stored analysis with the current config.py"):
@@ -607,7 +607,7 @@ def page_calibration() -> None:
 
     board_col, info = st.columns([2, 3])
     fen = leak["fen_before"]
-    board_col.image(board_svg(fen, leak["my_move"], leak["best_move"], size=420), use_container_width=True)
+    board_col.image(board_svg(fen, leak["my_move"], leak["best_move"], size=420), width="stretch")
     with info:
         key = leak["leak_type"] + (f":{leak['sub_type']}" if leak["sub_type"] else "")
         st.markdown(f"### {report.LEAK_LABELS.get(key, key)}")
@@ -626,7 +626,7 @@ def page_calibration() -> None:
         lines.append({"Move": san(fen, leak["my_move"]) + " (played)", "Win %": round(analysis.my_deep.win, 1),
                       "Forcing": "yes" if leaks.is_forcing(board, chess.Move.from_uci(leak["my_move"])) else "quiet",
                       "Line": trainer._san_line(board, [leak["my_move"]] + analysis.pv_after, 12)})
-        st.dataframe(pd.DataFrame(lines), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(lines), hide_index=True, width="stretch")
         st.caption(f"{game['white']} – {game['black']} · {game['date']} · {game['tc_class']}" +
                    (f" · [open game]({game['url']})" if game["url"] else "") +
                    (f" · already labelled: {existing['verdict']}" if existing else ""))
@@ -636,9 +636,9 @@ def page_calibration() -> None:
             st.session_state["calib_idx"] = idx + 1
 
         v, f, s = st.columns(3)
-        v.button("Valid", type="primary", use_container_width=True, on_click=label, args=("valid",))
-        f.button("False positive", use_container_width=True, on_click=label, args=("false_positive",))
-        if s.button("Skip", use_container_width=True):
+        v.button("Valid", type="primary", width="stretch", on_click=label, args=("valid",))
+        f.button("False positive", width="stretch", on_click=label, args=("false_positive",))
+        if s.button("Skip", width="stretch"):
             st.session_state["calib_idx"] = idx + 1
             st.rerun()
 
@@ -659,11 +659,11 @@ def analysis_progress() -> None:
     workers = c2.number_input("Workers", 1, 64, runner.default_workers(), disabled=bool(pid),
                               help="Stockfish processes in parallel. Use about one per physical core.")
     if pid:
-        if c1.button("■ Stop analysis", use_container_width=True):
+        if c1.button("■ Stop analysis", width="stretch"):
             runner.stop()
             st.toast("Stopping: finished games are saved, the rest resumes next time.")
     elif done < total:
-        if c1.button("▶ Start analysis", type="primary", use_container_width=True):
+        if c1.button("▶ Start analysis", type="primary", width="stretch"):
             try:
                 runner.start(d_from.isoformat(), d_to.isoformat(), tcs, int(workers))
                 st.toast("Analysis started in the background")
@@ -707,7 +707,7 @@ def page_import() -> None:
         st.warning("'From' is after 'To'.")
     done, total = selection_counts(d_from, d_to, formats)
     b, info = st.columns([1, 3])
-    clicked = b.button("Import games", type="primary", disabled=not ready, use_container_width=True)
+    clicked = b.button("Import games", type="primary", disabled=not ready, width="stretch")
     info.caption(f"**{total}** games of this selection are already stored. Stored games are never downloaded "
                  "twice, so pressing Import only fetches what is missing.")
     if clicked:
@@ -742,7 +742,7 @@ def page_import() -> None:
     if stored.empty:
         st.caption("Nothing stored yet.")
     else:
-        st.dataframe(stored, hide_index=True, use_container_width=True)
+        st.dataframe(stored, hide_index=True, width="stretch")
         with st.expander("Remove stored games outside the selection"):
             n = db.delete_games_outside(conn, d_from.isoformat(), d_to.isoformat(), formats, dry_run=True)
             st.write(f"**{n}** stored games are outside {d_from} … {d_to} / {', '.join(formats) or 'no format'}. "

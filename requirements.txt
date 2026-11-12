@@ -1,5 +1,5 @@
 chess>=1.10
-streamlit>=1.37
+streamlit>=1.50
 pandas>=2.0
 requests>=2.31
 rich>=13.0

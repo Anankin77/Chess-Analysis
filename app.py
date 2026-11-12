@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from chesscoach import config, db, importer, leaks, report, runner, theme, trainer
+from chesscoach import config, db, importer, leaks, report, review, runner, theme, trainer
 
 st.set_page_config(page_title="chess-coach", page_icon="♟", layout="wide")
 
@@ -313,12 +313,11 @@ def training_header(conn) -> None:
     names = {"forcing_bias": "Quiet-move accuracy (30 d)", "horizon": "Horizon accuracy (30 d)"}
     cols = st.columns(4)
     acc = f"{100 * stats['today_correct'] / stats['today']:.0f}%" if stats["today"] else "–"
-    cols[0].metric("Solved today", stats["today"], acc + " correct" if stats["today"] else None, delta_color="off")
+    cols[0].metric("Solved today", f"{stats['today']} ({acc})" if stats["today"] else 0)
     cols[1].metric("Day streak", stats["streak"])
     for col, key in zip(cols[2:], names):
         right, total = stats["by_type"].get(key, (0, 0))
-        col.metric(names[key], f"{100 * right / total:.0f}%" if total else "–",
-                   f"{right}/{total}" if total else None, delta_color="off")
+        col.metric(names[key], f"{100 * right / total:.0f}% ({right}/{total})" if total else "–")
 
 
 def _training_ui(mode: str, leak_type: str | None, prompt: str, allow_ahead_default: bool) -> None:
@@ -407,6 +406,134 @@ def page_quiet() -> None:
     st.title("Find the quiet move")
     st.caption("Only positions where you played a capture, check or attack and a quiet move was called for.")
     quiet_fragment()
+
+
+# =============================================================== Game review (one game, start to end)
+
+GRADE_ICONS = {"Best": "★", "Good": "✓", "Inaccuracy": "?!", "Mistake": "?", "Blunder": "??"}
+
+
+@st.fragment
+def game_moments(game_id: str) -> None:
+    """Move list on the left, replay board and coach comment on the right."""
+    conn = get_conn()
+    data = review.game_review(conn, game_id)
+    moves = data["moves"]
+    key_only = st.radio("Show", ["Key moments", "All my moves"], horizontal=True,
+                        label_visibility="collapsed", key="game_show") == "Key moments"
+    shown = [m for m in moves if m["grade"] in ("Inaccuracy", "Mistake", "Blunder")
+             or "Only" in m["comment"] or "only move" in m["comment"]] if key_only else moves
+    if not shown:
+        st.success("No key moments: nothing lost 5 win % or more. Switch to 'All my moves' to browse.")
+        return
+    table = pd.DataFrame({
+        "Move": [m["label"] for m in shown],
+        "Verdict": [f"{GRADE_ICONS[m['grade']]} {m['grade']}" for m in shown],
+        "Win % lost": [m["drop"] for m in shown],
+        "Best": [m["best_san"] for m in shown],
+        "Best is": [m["best_kind"] for m in shown],
+        "Tags": [", ".join(m["leaks"] + (["time trouble"] if m["time_trouble"] == "yes" else [])) for m in shown],
+    })
+    left, right = st.columns([3, 2])
+    with left:
+        event = st.dataframe(table, hide_index=True, use_container_width=True, height=min(460, 38 * len(shown) + 40),
+                             on_select="rerun", selection_mode="single-row", key=f"moves_{game_id}_{key_only}")
+        st.caption("Select a move to see it on the board.")
+    rows = event.selection.rows if event and event.selection else []
+    default = max(range(len(shown)), key=lambda i: shown[i]["drop"])
+    m = shown[rows[0] if rows else default]
+    with right:
+        payload = trainer.puzzle_payload(conn, game_id, m["ply"])
+        if payload:
+            _board_component(puzzle_id=f"game-{game_id}-{m['ply']}", mode="view", pieces=chess.svg.PIECES,
+                             prompt=f"{m['label']} · {m['grade']}" + (f" · −{m['drop']:.0f} win %" if m["drop"] >= 1 else ""),
+                             key="game_viewer", default=None, **payload)
+        st.markdown(m["comment"])
+        if m["drop"] < 5 and m["plan"]:
+            st.caption(f"Engine's plan from here: {m['plan']}.")
+
+
+def page_game() -> None:
+    conn = get_conn()
+    st.title("Game review")
+    st.caption("One game from start to end: every decision of yours graded, the engine's plan in words, "
+               "your mistakes, and the moments that called for a quiet move.")
+
+    c1, c2, c3 = st.columns([2, 2, 3])
+    fmt = c1.selectbox("Format", ["rapid", "blitz", "bullet", "any"], key="game_fmt")
+    if c2.button("⬇ Fetch my newest games", use_container_width=True,
+                 help="Downloads the last 35 days from Chess.com (all formats except daily)."):
+        today = date.today()
+        with st.spinner("Asking Chess.com…"):
+            try:
+                stats = importer.import_chesscom(conn, config.CHESSCOM_USERNAME, (today - timedelta(days=35)).isoformat(),
+                                                 today.isoformat(), ["rapid", "blitz", "bullet"])
+                st.toast(f"{stats.imported} new games")
+            except Exception as exc:
+                st.error(f"Chess.com import failed: {exc}")
+    sql = "SELECT * FROM games WHERE tc_class != 'daily'" + ("" if fmt == "any" else " AND tc_class = ?")
+    games = conn.execute(sql + " ORDER BY date DESC, CAST(SUBSTR(id, INSTR(id, ':') + 6) AS INTEGER) DESC, id DESC LIMIT 80",
+                         [] if fmt == "any" else [fmt]).fetchall()
+    if not games:
+        st.info("No stored games of this format yet. Fetch your newest games above, or use the Import page.")
+        return
+
+    def game_label(g) -> str:
+        opp = g["black"] if g["my_color"] == "white" else g["white"]
+        return f"{g['date']} · {g['tc_class']} · {g['my_color']} vs {opp} · {g['result']}"
+
+    by_id = {g["id"]: g for g in games}
+    gid = st.selectbox("Game", list(by_id), format_func=lambda i: game_label(by_id[i]), key="game_pick")
+    game = by_id[gid]
+
+    if game["analysis_status"] != "done":
+        st.write("This game is not analyzed yet. It takes about a minute.")
+        if st.button("▶ Analyze this game now", type="primary"):
+            bar = st.progress(0.0, text="Starting Stockfish…")
+            try:
+                n = review.analyze_now(conn, gid, lambda done, total: bar.progress(
+                    min(1.0, done / max(1, total)), text=f"Move {done // 2 + 1} of {total // 2 + 1}"))
+                bar.empty()
+                st.toast(f"Analyzed {n} of your moves")
+                st.rerun()
+            except FileNotFoundError as exc:
+                bar.empty()
+                st.error(str(exc))
+            except Exception as exc:
+                bar.empty()
+                st.error(f"Analysis failed: {exc}")
+        return
+
+    data = review.game_review(conn, gid)
+    s = data["summary"]
+    st.markdown(f"**{game['white']} – {game['black']}** · {game['opening'] or 'Unknown opening'} · "
+                f"{game['time_control']} · you were {game['my_color']} · **{game['result']}**"
+                + (f" · [open on Chess.com]({game['url']})" if game["url"] else ""))
+    if not data["moves"]:
+        st.info("Every move of yours was opening theory: nothing to review.")
+        return
+    cols = st.columns(4)
+    cols[0].metric("Avg win % lost / move", s["avg_loss"])
+    cols[1].metric("Mistakes + blunders", s["counts"]["Mistake"] + s["counts"]["Blunder"])
+    cols[2].metric("Quiet moves found", f"{s['quiet_found']}/{s['quiet_needed']}" if s["quiet_needed"] else "–")
+    cols[3].metric("Leaks flagged", s["leaks"])
+    st.caption(f"{s['counts']['Inaccuracy']} inaccuracies · {s['counts']['Best']} best moves · "
+               f"opening book until move {s['book_plies'] // 2 + 1} · {s['analyzed']} moves analyzed")
+
+    st.subheader("Lessons from this game")
+    with st.container(border=True):
+        for note in review.lessons(data):
+            st.markdown("- " + note)
+
+    st.subheader("Your winning chances")
+    chart = pd.DataFrame({"Best available": [m["best_win"] for m in data["moves"]],
+                          "After your move": [m["my_win"] for m in data["moves"]]},
+                         index=pd.Index([m["move_no"] for m in data["moves"]], name="Move"))
+    st.line_chart(chart, y_label="Win %", x_label="Move", height=260, color=["#81b64c", "#d9a441"])
+    st.caption("The gap between the two lines is what each move gave away.")
+
+    st.subheader("Move by move")
+    game_moments(gid)
 
 
 # =============================================================== Page 4: Calibration
@@ -638,12 +765,14 @@ def page_import() -> None:
 
 PAGES = {
     "import": st.Page(page_import, title="1 · Import & analyze", icon="⬇", default=True),
+    "game": st.Page(page_game, title="Game review", icon="🔍", url_path="game"),
     "report": st.Page(page_report, title="2 · Leak report", icon="📊", url_path="report"),
     "trainer": st.Page(page_trainer, title="3 · Trainer", icon="♟", url_path="trainer"),
     "quiet": st.Page(page_quiet, title="Find the quiet move", icon="🤫", url_path="quiet"),
     "calibration": st.Page(page_calibration, title="Calibration", icon="🎯", url_path="calibration"),
 }
 st.navigation({"Workflow": [PAGES["import"], PAGES["report"], PAGES["trainer"]],
+               "One game": [PAGES["game"]],
                "Extras": [PAGES["quiet"], PAGES["calibration"]]}).run()
 
 st.sidebar.markdown("> *I don't believe in psychology. I believe in good moves.*\n>\n> — Bobby Fischer")

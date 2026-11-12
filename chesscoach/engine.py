@@ -17,7 +17,7 @@ import os
 import signal
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import chess
 import chess.engine
@@ -122,7 +122,8 @@ def analyze_move(engine: chess.engine.SimpleEngine, board: chess.Board, move: ch
 
 
 def analyze_game(engine: chess.engine.SimpleEngine, book: OpeningBook, game_id: str, pgn: str,
-                 my_color: str, settings: EngineSettings = EngineSettings()) -> GameAnalysisResult:
+                 my_color: str, settings: EngineSettings = EngineSettings(),
+                 on_move: Optional[Callable[[int, int], None]] = None) -> GameAnalysisResult:
     game = chess.pgn.read_game(io.StringIO(pgn))
     if game is None:
         return GameAnalysisResult(game_id, error="empty PGN")
@@ -130,7 +131,10 @@ def analyze_game(engine: chess.engine.SimpleEngine, book: OpeningBook, game_id: 
     board = game.board()
     result = GameAnalysisResult(game_id)
     in_book = True
-    for ply, move in enumerate(game.mainline_moves()):
+    mainline = list(game.mainline_moves())
+    for ply, move in enumerate(mainline):
+        if on_move:
+            on_move(ply, len(mainline))
         if in_book:
             in_book = book.is_book_move(board, move)
             if in_book:

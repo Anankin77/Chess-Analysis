@@ -51,7 +51,7 @@
                 box-shadow: 0 3px 0 #2a190d; cursor: pointer; }
   #nav button:active { transform: translateY(2px); box-shadow: 0 1px 0 #2a190d; }
   #nav button:disabled { opacity: .4; cursor: default; }
-  #moves { flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; padding: 4px 8px; border-radius: 8px;
+  #moves { font-size: 14px; line-height: 1.5; padding: 4px 8px; border-radius: 8px;
            background: var(--panel); border: 1px solid rgba(217,164,65,.2); max-height: 68px; overflow-y: auto; }
   #moves span { padding: 1px 3px; border-radius: 4px; cursor: pointer; white-space: nowrap; display: inline-block; }
   #moves span.cur { background: var(--gold); color: #24160c; font-weight: 700; }
@@ -65,6 +65,26 @@
   .row .tag { font-size: 12px; padding: 1px 7px; border-radius: 9px; color: #fff; white-space: nowrap; }
   .tag.ok { background: #5d8a34; } .tag.bad { background: #b23a30; } .tag.you { background: #7a5a2a; }
   .row .hint { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+  #evalbar { display: none; position: relative; height: 16px; margin-top: 8px; border-radius: 8px; overflow: hidden;
+             background: #2a1b10; border: 1px solid rgba(217,164,65,.3); }
+  #evalfill { height: 100%; width: 50%; background: linear-gradient(90deg, #5d8a34, #81b64c); transition: width .25s; }
+  #evaltxt { position: absolute; inset: 0; text-align: center; font-size: 11px; line-height: 15px; font-weight: 700; }
+  #comment { display: none; background: var(--panel); border: 1px solid rgba(217,164,65,.2); border-radius: 8px;
+             padding: 4px 12px; font-size: 15px; line-height: 1.5; }
+  #comment p { margin: 8px 0; }
+  #subbtns { display: none; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  #subbtns button { flex: 1 1 150px; min-height: 44px; border-radius: 8px; border: 1px solid rgba(0,0,0,.4); font-size: 14px;
+                    font-weight: 700; color: var(--text); background: linear-gradient(180deg, #6b4728, #4c3019);
+                    box-shadow: 0 3px 0 #2a190d; cursor: pointer; }
+  #subbtns button.go { background: linear-gradient(180deg, #95c95b, #6fa53c); box-shadow: 0 3px 0 #45691f; color: #fff; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 9px; color: #fff; margin-left: 8px; vertical-align: middle; white-space: nowrap; }
+  .g-Best, .g-Good { background: #5d8a34; } .g-Inaccuracy { background: #b58a1e; } .g-Mistake { background: #c9692a; }
+  .g-Blunder { background: #b23a30; } .g-Book { background: #6b5a45; } .g-Opponent { background: #3f6f8f; }
+  #moves span.m-Inaccuracy { color: #f0c24a; } #moves span.m-Mistake { color: #f08a4a; } #moves span.m-Blunder { color: #ff7a6e; }
+  #moves span.cur { color: #24160c !important; }
+  body.game #lines { display: none; } body.game #comment, body.game #evalbar { display: block; } body.game #subbtns { display: flex; }
+  body.game #moves { max-height: 92px; }
+  body:not(.game) #last, body:not(.game) #key { display: none; }
   @media (max-width: 420px) {
     #wrap { padding-right: 0; } #frame { padding: 6px; border-radius: 8px; }
     .row .hint { display: none; } .coord { font-size: 8px; }
@@ -74,14 +94,19 @@
 <body>
 <div id="wrap">
   <div id="frame"><div id="board"><div id="grain"></div><svg id="arrows" viewBox="0 0 8 8"></svg><div id="promo"></div></div></div>
+  <div id="evalbar"><div id="evalfill"></div><span id="evaltxt"></span></div>
   <div id="status"></div>
   <div id="reveal">
     <div id="nav">
       <button id="first" title="Back to the position">⏮</button>
       <button id="prev" title="Previous move (←)">◀</button>
       <button id="next" title="Next move (→)">▶</button>
-      <div id="moves"></div>
+      <button id="last" title="End of the game">⏭</button>
+      <button id="key" title="Next key moment">⚠</button>
     </div>
+    <div id="movesrow" style="margin-bottom:8px"><div id="moves"></div></div>
+    <div id="subbtns"></div>
+    <div id="comment"></div>
     <div id="lines"></div>
   </div>
 </div>
@@ -230,12 +255,74 @@ function reveal() {
   show();
 }
 
-function step(delta) { if (answered) { viewPly += delta; show(); } }
-$("first").onclick = () => { viewPly = 0; show(); };
+// ---- whole-game walkthrough (mode "game") ------------------------------------------------
+let gi = -1, sub = null;       // current game ply (-1 = start); sub = {line, ply, title} while inside a side line
+const isGame = () => A && A.mode === "game";
+const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+
+function gameShow() {
+  const P = A.plies;
+  gi = Math.max(-1, Math.min(gi, P.length - 1));
+  const cur = gi >= 0 ? P[gi] : null;
+  let fen = A.fen, last = null, arrows = "";
+  if (sub) { sub.ply = Math.max(1, Math.min(sub.ply, sub.line.fens.length)); fen = sub.line.fens[sub.ply - 1]; last = sub.line.ucis[sub.ply - 1]; }
+  else if (cur) { fen = cur.fen; last = cur.uci; if (cur.best && cur.best.uci !== cur.uci) arrows = arrow(cur.best.uci, "#81b64c", .16); }
+  pos = parseFen(fen); lastMove = last; arrowsEl.innerHTML = arrows; draw();
+
+  statusEl.className = "";
+  if (sub) statusEl.innerHTML = esc(sub.title);
+  else if (!cur) statusEl.textContent = "Start position";
+  else statusEl.innerHTML = esc(cur.label) + (cur.grade ? `<span class="chip g-${cur.grade.split(" ")[0]}">${esc(cur.grade)}</span>` : "");
+
+  $("comment").innerHTML = sub ? `<p>${md(sub.note)}</p>` : cur ? cur.text.map((t) => `<p>${md(t)}</p>`).join("") : `<p>${md(A.intro || "")}</p>`;
+  $("subbtns").innerHTML = sub ? '<button data-a="back">↩ Back to the game</button>' :
+    (cur && cur.best ? `<button class="go" data-a="best">▶ Play the better ${esc(cur.best.san)}</button>` : "") +
+    (cur && cur.cont ? '<button data-a="cont">▶ What the engine expects next</button>' : "");
+
+  if (sub) movesEl.innerHTML = sub.line.sans.map((s, i) => `<span data-p="${i + 1}" class="${i + 1 === sub.ply ? "cur" : ""}">${esc(s)}</span>`).join(" ");
+  else movesEl.innerHTML = P.map((m, i) => `<span data-p="${i}" class="${i === gi ? "cur " : ""}${m.who === "me" ? "m-" + m.grade : ""}">${esc(m.short)}</span>`).join(" ");
+  const c = movesEl.querySelector(".cur"); if (c) movesEl.scrollTop = Math.max(0, c.offsetTop - movesEl.offsetTop - 30);
+
+  const ev = cur && cur.eval !== null && cur.eval !== undefined ? cur.eval : null;
+  $("evalfill").style.width = (ev === null ? 50 : ev) + "%";
+  $("evaltxt").textContent = ev === null ? "" : `your winning chances ${Math.round(ev)}%`;
+  $("first").disabled = $("prev").disabled = sub ? sub.ply <= 1 : gi < 0;
+  $("next").disabled = sub ? sub.ply >= sub.line.fens.length : gi >= P.length - 1;
+  $("last").disabled = !!sub || gi >= P.length - 1;
+  $("key").disabled = !!sub || !P.some((m) => m.key);
+  setHeight();
+}
+
+$("subbtns").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const cur = A.plies[gi];
+  if (b.dataset.a === "back") sub = null;
+  else if (b.dataset.a === "best") sub = {line: cur.best, ply: 1, title: `Better line instead of ${cur.label}`,
+                                          note: "This is the line the engine prefers. Step through it with **◀ ▶**."};
+  else sub = {line: cur.cont, ply: 1, title: `Engine line after ${cur.label}`,
+              note: "Best play for both sides after the move played in the game. Step with **◀ ▶**."};
+  gameShow();
+};
+$("last").onclick = () => { gi = A.plies.length - 1; gameShow(); };
+$("key").onclick = () => {
+  const P = A.plies; let i = P.findIndex((m, k) => k > gi && m.key);
+  if (i < 0) i = P.findIndex((m) => m.key);
+  if (i >= 0) { gi = i; gameShow(); }
+};
+
+function step(delta) {
+  if (isGame()) { if (sub) sub.ply += delta; else gi += delta; gameShow(); }
+  else if (answered) { viewPly += delta; show(); }
+}
+$("first").onclick = () => { if (isGame()) { if (sub) sub.ply = 1; else gi = -1; gameShow(); } else { viewPly = 0; show(); } };
 $("prev").onclick = () => step(-1);
 $("next").onclick = () => step(1);
 linesEl.onclick = (e) => { const r = e.target.closest(".row"); if (r) { viewLine = +r.dataset.i; viewPly = 1; show(); } };
-movesEl.onclick = (e) => { const s = e.target.closest("span"); if (s) { viewPly = +s.dataset.p; show(); } };
+movesEl.onclick = (e) => {
+  const s = e.target.closest("span"); if (!s) return;
+  if (isGame()) { if (sub) sub.ply = +s.dataset.p; else gi = +s.dataset.p; gameShow(); }
+  else { viewPly = +s.dataset.p; show(); }
+};
 document.addEventListener("keydown", (e) => {
   if (!answered) return;
   if (e.key === "ArrowLeft") { step(-1); e.preventDefault(); }
@@ -334,7 +421,13 @@ window.addEventListener("message", (e) => {
     arrowsEl.innerHTML = ""; revealEl.style.display = "none"; promoEl.style.display = "none";
     statusEl.className = ""; frameEl.className = "";
     statusEl.textContent = (A.orientation === "white" ? "White" : "Black") + " to move. " + (A.prompt || "");
+    document.body.classList.toggle("game", A.mode === "game");
     draw();
+    if (A.mode === "game") {                             // whole-game walkthrough: no question at all
+      answered = true; gi = (A.start === undefined ? -1 : A.start); sub = null;
+      revealEl.style.display = "block";
+      gameShow();
+    }
     if (A.mode === "view") reveal();                     // browsing a leak: no question, straight to replay
   }
   setHeight();

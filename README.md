@@ -128,7 +128,7 @@ A step bar on top follows the workflow: **Import → Analyze → Report → Trai
 | 1 · Import & analyze | Choose dates and time formats, import from Chess.com, **Start / Stop analysis** with a live progress bar. Also: remove unwanted games, upload PGN, terminal command. |
 | 2 · Leak report | Headline findings, top 3 patterns with boards, breakdown by leak type / phase / time control / time trouble, monthly trend, and a browser to replay every leak. Filters: time control, colour, opening, result, dates. |
 | 3 · Trainer | Your leak positions as SM-2 cards. Move, then replay the engine lines and the refutation of your game move with ◀ ▶. Shows today's count, day streak and 30-day accuracy per leak type. |
-| Game review | One game start to end: fetch your newest games or paste a PGN, analyze it in about a minute, then lessons, a win % chart and every move graded with the engine's plan in words. |
+| Game review | One game start to end: fetch your newest games or paste a PGN, analyze it in about a minute, then step through it move by move: what each move is for, your verdict, the better move, the plan behind it and why yours fell short. Also lessons, a win % chart and a table of key moments. |
 | Find the quiet move | Same drill, forcing-bias positions only. |
 | Calibration | Judge 20 random flagged positions as Valid / False positive; precision per leak type shows which threshold to tune. |
 
@@ -222,7 +222,8 @@ chesscoach/trainer.py      SM-2 and answer checking
 chesscoach/report.py       data frames for the leak report
 chesscoach/theme.py        walnut look (CSS, generated wood grain)
 chesscoach/runner.py       start / stop the batch from the app
-chesscoach/review.py       single-game review (grades, plan in words, lessons)
+chesscoach/review.py       single-game review (grades, lessons, move-by-move walkthrough)
+chesscoach/ideas.py        what a move is for, from board features
 chesscoach/board_component/  client-side training board
 ```
 

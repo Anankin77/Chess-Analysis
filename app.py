@@ -591,7 +591,22 @@ def page_game() -> None:
     st.caption("The gap between the two lines is what each move gave away.")
 
     st.subheader("Move by move")
-    game_moments(gid)
+    walk = review.walkthrough(conn, gid)
+    left, right = st.columns([3, 2])
+    with left:
+        _board_component(puzzle_id=f"walk-{gid}", mode="game", pieces=chess.svg.PIECES, legal=[], accepted=[],
+                         lines=[], played={}, prompt="", key="game_walk", default=None, **walk)
+    with right:
+        st.markdown("**How to read it**\n"
+                    "- **◀ ▶** step through the game (arrow keys work too); **⚠** jumps to your next key moment.\n"
+                    "- Under the board: what each move is for, your verdict, the better move and the plan behind it.\n"
+                    "- A green arrow shows the better move. **Play the better …** walks you down that line.\n"
+                    "- The bar under the board is your winning chances after the move.")
+        st.caption("Explanations are built from engine lines and board features (attacks, pins, files, outposts, "
+                   "pawn breaks), not written by a language model.")
+
+    with st.expander("Table of key moments"):
+        game_moments(gid)
 
 
 # =============================================================== Page 4: Calibration

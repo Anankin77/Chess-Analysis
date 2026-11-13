@@ -113,8 +113,10 @@ def _comment(a: MoveAnalysis, board: chess.Board, label: str, my_kind: str, best
             parts.append(f"Only good move, and a quiet one: well found (next best is {second_gap:.0f} win % worse).")
         elif second_gap >= config.WIN_PCT_BLUNDER_DROP:
             parts.append(f"The only move that holds the evaluation (next best is {second_gap:.0f} win % worse).")
-        else:
+        elif a.my_move == a.deep_lines[0].uci:
             parts.append("Engine's first choice.")
+        else:
+            parts.append(f"As good as the engine's first choice {best_san}.")
     elif drop < 5.0:
         parts.append(f"Fine. The engine prefers {best_san} by {drop:.1f} win %.")
     else:
@@ -158,7 +160,7 @@ def game_review(conn: sqlite3.Connection, game_id: str) -> Optional[dict]:
         dots = "." if board.turn == chess.WHITE else "…"
         best_san = board.san(best_move)
         moves.append({
-            "ply": a.ply, "move_no": board.fullmove_number,
+            "ply": a.ply, "move_no": board.fullmove_number, "phase": leaks.game_phase(board),
             "label": f"{board.fullmove_number}{dots}{board.san(my_move)}{symbol}",
             "san": board.san(my_move), "best_san": best_san, "grade": label,
             "my_win": round(a.my_deep.win, 1), "best_win": round(a.best_deep_win, 1), "drop": round(a.win_drop, 1),
@@ -170,7 +172,15 @@ def game_review(conn: sqlite3.Connection, game_id: str) -> Optional[dict]:
 
     quiet_needed = [m for m in moves if m["best_kind"] == "quiet move"]
     counts = {g[1]: sum(1 for m in moves if m["grade"] == g[1]) for g in GRADES}
+    by_phase = {}
+    for phase in ("opening", "middlegame", "endgame"):
+        part = [m for m in moves if m["phase"] == phase]
+        if part:
+            by_phase[phase] = {"moves": len(part), "avg_loss": round(sum(m["drop"] for m in part) / len(part), 2),
+                               "errors": sum(1 for m in part if m["grade"] in ("Mistake", "Blunder")),
+                               "inaccuracies": sum(1 for m in part if m["grade"] == "Inaccuracy")}
     summary = {
+        "by_phase": by_phase,
         "analyzed": len(moves), "book_plies": game["book_plies"] or 0, "counts": counts,
         "avg_loss": round(sum(m["drop"] for m in moves) / len(moves), 2) if moves else 0.0,
         "quiet_needed": len(quiet_needed),
@@ -273,7 +283,8 @@ def walkthrough(conn: sqlite3.Connection, game_id: str) -> Optional[dict]:
                     pass
             if drop < 1.0:
                 second_gap = best.win - a.deep_lines[1].win if len(a.deep_lines) > 1 else 0.0
-                text.append("**Best move.**" + (f" The only one: the next best is {second_gap:.0f} win % worse."
+                text.append(("**Best move.**" if a.my_move == best.uci
+                             else f"**As good as the engine's first choice {best_san}.**") + (f" The only one: the next best is {second_gap:.0f} win % worse."
                                                 if second_gap >= config.FORCING_LEAK_MARGIN else ""))
             elif drop < 5.0:
                 text.append(f"**Good.** The engine slightly prefers **{best_san}** ({describe(board, best_move, prev_move)}), "

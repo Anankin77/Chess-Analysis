@@ -432,46 +432,6 @@ def page_quiet() -> None:
 GRADE_ICONS = {"Best": "★", "Good": "✓", "Inaccuracy": "?!", "Mistake": "?", "Blunder": "??"}
 
 
-@st.fragment
-def game_moments(game_id: str) -> None:
-    """Move list on the left, replay board and coach comment on the right."""
-    conn = get_conn()
-    data = review.game_review(conn, game_id)
-    moves = data["moves"]
-    key_only = st.radio("Show", ["Key moments", "All my moves"], horizontal=True,
-                        label_visibility="collapsed", key="game_show") == "Key moments"
-    shown = [m for m in moves if m["grade"] in ("Inaccuracy", "Mistake", "Blunder")
-             or "Only" in m["comment"] or "only move" in m["comment"]] if key_only else moves
-    if not shown:
-        st.success("No key moments: nothing lost 5 win % or more. Switch to 'All my moves' to browse.")
-        return
-    table = pd.DataFrame({
-        "Move": [m["label"] for m in shown],
-        "Verdict": [f"{GRADE_ICONS[m['grade']]} {m['grade']}" for m in shown],
-        "Win % lost": [m["drop"] for m in shown],
-        "Best": [m["best_san"] for m in shown],
-        "Best is": [m["best_kind"] for m in shown],
-        "Tags": [", ".join(m["leaks"] + (["time trouble"] if m["time_trouble"] == "yes" else [])) for m in shown],
-    })
-    left, right = st.columns([3, 2])
-    with left:
-        event = st.dataframe(table, hide_index=True, width="stretch", height=min(460, 38 * len(shown) + 40),
-                             on_select="rerun", selection_mode="single-row", key=f"moves_{game_id}_{key_only}")
-        st.caption("Select a move to see it on the board.")
-    rows = event.selection.rows if event and event.selection else []
-    default = max(range(len(shown)), key=lambda i: shown[i]["drop"])
-    m = shown[rows[0] if rows else default]
-    with right:
-        payload = trainer.puzzle_payload(conn, game_id, m["ply"])
-        if payload:
-            _board_component(puzzle_id=f"game-{game_id}-{m['ply']}", mode="view", pieces=chess.svg.PIECES,
-                             prompt=f"{m['label']} · {m['grade']}" + (f" · −{m['drop']:.0f} win %" if m["drop"] >= 1 else ""),
-                             key="game_viewer", default=None, **payload)
-        st.markdown(m["comment"])
-        if m["drop"] < 5 and m["plan"]:
-            st.caption(f"Engine's plan from here: {m['plan']}.")
-
-
 def _paste_pgn() -> None:
     """Button callback: store the pasted game and select it for review."""
     ss = st.session_state
@@ -483,8 +443,9 @@ def _paste_pgn() -> None:
     stats = importer.import_pgn_text(get_conn(), text, importer.my_usernames(), force_color=side)
     if stats.ids:
         ss["game_fmt"], ss["game_pick"], ss["paste_pgn"] = "any", stats.ids[-1], ""
+        ss["auto_analyze"] = stats.ids[-1]              # review it straight away
         extra = f" ({len(stats.ids)} games in the paste; showing the last)" if len(stats.ids) > 1 else ""
-        ss["paste_msg"] = ("ok", ("Game added." if stats.imported else "That game was already stored.") + extra)
+        ss["paste_msg"] = ("ok", ("Game added." if stats.imported else "That game was already stored: showing it.") + extra)
     elif stats.aborted:
         ss["paste_msg"] = ("error", "That PGN has no moves.")
     else:
@@ -493,79 +454,94 @@ def _paste_pgn() -> None:
         ss["paste_msg"] = ("error", f"Could not read it: {why}.{hint}")
 
 
+def _run_analysis(conn, gid: str) -> bool:
+    bar = st.progress(0.0, text="Starting Stockfish…")
+    try:
+        n = review.analyze_now(conn, gid, lambda done, total: bar.progress(
+            min(1.0, done / max(1, total)), text=f"Analyzing move {done // 2 + 1} of {total // 2 + 1}"))
+        bar.empty()
+        st.toast(f"Analyzed {n} of your moves")
+        return True
+    except FileNotFoundError as exc:
+        bar.empty()
+        st.error(str(exc))
+    except Exception as exc:
+        bar.empty()
+        st.error(f"Analysis failed: {exc}")
+    return False
+
+
 def page_game() -> None:
     conn = get_conn()
-    st.title("Game review")
-    st.caption("One game from start to end: every decision of yours graded, the engine's plan in words, "
-               "your mistakes, and the moments that called for a quiet move.")
+    st.title("Individual game review")
+    st.caption("Paste one game and get its overall report, then go through it move by move with a review of every move.")
 
-    c1, c2, c3 = st.columns([2, 2, 3])
-    fmt = c1.selectbox("Format", ["rapid", "blitz", "bullet", "any"], key="game_fmt")
-    if c2.button("⬇ Fetch my newest games", width="stretch",
-                 help="Downloads the last 35 days from Chess.com (all formats except daily)."):
-        today = date.today()
-        with st.spinner("Asking Chess.com…"):
-            try:
-                stats = importer.import_chesscom(conn, config.CHESSCOM_USERNAME, (today - timedelta(days=35)).isoformat(),
-                                                 today.isoformat(), ["rapid", "blitz", "bullet"])
-                st.toast(f"{stats.imported} new games")
-            except Exception as exc:
-                st.error(f"Chess.com import failed: {exc}")
-    with st.expander("📋 Paste a PGN", expanded=bool(st.session_state.get("paste_pgn"))):
-        st.text_area("PGN", key="paste_pgn", height=160, label_visibility="collapsed",
-                     placeholder="Paste the PGN here (Chess.com: Share → PGN → copy)")
-        a, b = st.columns([2, 1])
-        a.radio("I played", ["Detect from username", "White", "Black"], horizontal=True, key="paste_side",
-                help=f"Detection looks for {config.CHESSCOM_USERNAME} in the White/Black tags.")
-        b.button("Add this game", type="primary", width="stretch", on_click=_paste_pgn)
+    # ---- 1. input: paste first, stored games second ----
+    st.text_area("PGN", key="paste_pgn", height=170, label_visibility="collapsed",
+                 placeholder="Paste the PGN here (Chess.com: Share → PGN → copy), then press Review this game")
+    a, b = st.columns([3, 1])
+    a.radio("I played", ["Detect from username", "White", "Black"], horizontal=True, key="paste_side",
+            help=f"Detection looks for {config.CHESSCOM_USERNAME} in the White/Black tags.")
+    b.button("▶ Review this game", type="primary", width="stretch", on_click=_paste_pgn)
     kind, msg = st.session_state.pop("paste_msg", (None, None))
-    if kind:
-        (st.success if kind == "ok" else st.error)(msg)
+    if kind == "error":
+        st.error(msg)
 
-    sql = "SELECT * FROM games WHERE tc_class != 'daily'" + ("" if fmt == "any" else " AND tc_class = ?")
-    games = conn.execute(sql + " ORDER BY date DESC, CAST(SUBSTR(id, INSTR(id, ':') + 6) AS INTEGER) DESC, id DESC LIMIT 80",
-                         [] if fmt == "any" else [fmt]).fetchall()
-    if not games and not st.session_state.get("game_pick"):
-        st.info("No stored games of this format yet. Fetch your newest games or paste a PGN above.")
+    with st.expander("Or review a game that is already stored / fetch from Chess.com"):
+        c1, c2 = st.columns([1, 1])
+        fmt = c1.selectbox("Format", ["rapid", "blitz", "bullet", "any"], key="game_fmt")
+        c2.write("")
+        if c2.button("⬇ Fetch my newest games", width="stretch",
+                     help="Downloads the last 35 days from Chess.com (all formats except daily)."):
+            today = date.today()
+            with st.spinner("Asking Chess.com…"):
+                try:
+                    stats = importer.import_chesscom(conn, config.CHESSCOM_USERNAME,
+                                                     (today - timedelta(days=35)).isoformat(), today.isoformat(),
+                                                     ["rapid", "blitz", "bullet"])
+                    st.toast(f"{stats.imported} new games")
+                except Exception as exc:
+                    st.error(f"Chess.com import failed: {exc}")
+        sql = "SELECT * FROM games WHERE tc_class != 'daily'" + ("" if fmt == "any" else " AND tc_class = ?")
+        games = conn.execute(sql + " ORDER BY date DESC, CAST(SUBSTR(id, INSTR(id, ':') + 6) AS INTEGER) DESC, id DESC LIMIT 80",
+                             [] if fmt == "any" else [fmt]).fetchall()
+
+        def game_label(g) -> str:
+            opp = g["black"] if g["my_color"] == "white" else g["white"]
+            return f"{g['date'] or 'no date'} · {g['tc_class']} · {g['my_color']} vs {opp} · {g['result']}"
+
+        by_id = {g["id"]: g for g in games}
+        picked = st.session_state.get("game_pick")
+        if picked and picked not in by_id:           # e.g. a pasted game without date or time control
+            row = conn.execute("SELECT * FROM games WHERE id=?", (picked,)).fetchone()
+            if row and (fmt == "any" or row["tc_class"] == fmt):
+                by_id = {picked: row, **by_id}
+            else:
+                st.session_state.pop("game_pick", None)
+        gid = st.selectbox("Game", list(by_id), format_func=lambda i: game_label(by_id[i]), key="game_pick",
+                           index=None, placeholder="Choose a stored game") if by_id else None
+    if gid is None:
+        st.info("Paste a PGN above and press **Review this game**. The analysis takes about a minute.")
         return
-
-    def game_label(g) -> str:
-        opp = g["black"] if g["my_color"] == "white" else g["white"]
-        return f"{g['date']} · {g['tc_class']} · {g['my_color']} vs {opp} · {g['result']}"
-
-    by_id = {g["id"]: g for g in games}
-    picked = st.session_state.get("game_pick")
-    if picked and picked not in by_id:               # e.g. a pasted game without date or time control
-        row = conn.execute("SELECT * FROM games WHERE id=?", (picked,)).fetchone()
-        if row and (fmt == "any" or row["tc_class"] == fmt):
-            by_id = {picked: row, **by_id}
-        else:
-            st.session_state.pop("game_pick", None)
-    gid = st.selectbox("Game", list(by_id), format_func=lambda i: game_label(by_id[i]), key="game_pick")
     game = by_id[gid]
 
+    # ---- 2. analysis (automatic right after a paste) ----
     if game["analysis_status"] != "done":
-        st.write("This game is not analyzed yet. It takes about a minute.")
-        if st.button("▶ Analyze this game now", type="primary"):
-            bar = st.progress(0.0, text="Starting Stockfish…")
-            try:
-                n = review.analyze_now(conn, gid, lambda done, total: bar.progress(
-                    min(1.0, done / max(1, total)), text=f"Move {done // 2 + 1} of {total // 2 + 1}"))
-                bar.empty()
-                st.toast(f"Analyzed {n} of your moves")
+        auto = st.session_state.pop("auto_analyze", None) == gid
+        if not auto:
+            st.write("This game is not analyzed yet. It takes about a minute.")
+        if auto or st.button("▶ Analyze this game now", type="primary"):
+            if _run_analysis(conn, gid):
                 st.rerun()
-            except FileNotFoundError as exc:
-                bar.empty()
-                st.error(str(exc))
-            except Exception as exc:
-                bar.empty()
-                st.error(f"Analysis failed: {exc}")
         return
 
     data = review.game_review(conn, gid)
     s = data["summary"]
+
+    # ---- 3. overall report ----
+    st.header("Overall report")
     st.markdown(f"**{game['white']} – {game['black']}** · {game['opening'] or 'Unknown opening'} · "
-                f"{game['time_control']} · you were {game['my_color']} · **{game['result']}**"
+                f"{game['time_control'] or 'no time control'} · you were {game['my_color']} · **{game['result']}**"
                 + (f" · [open on Chess.com]({game['url']})" if game["url"] else ""))
     if not data["moves"]:
         st.info("Every move of yours was opening theory: nothing to review.")
@@ -575,38 +551,61 @@ def page_game() -> None:
     cols[1].metric("Mistakes + blunders", s["counts"]["Mistake"] + s["counts"]["Blunder"])
     cols[2].metric("Quiet moves found", f"{s['quiet_found']}/{s['quiet_needed']}" if s["quiet_needed"] else "–")
     cols[3].metric("Leaks flagged", s["leaks"])
-    st.caption(f"{s['counts']['Inaccuracy']} inaccuracies · {s['counts']['Best']} best moves · "
-               f"opening book until move {s['book_plies'] // 2 + 1} · {s['analyzed']} moves analyzed")
 
-    st.subheader("Lessons from this game")
-    with st.container(border=True):
-        for note in review.lessons(data):
-            st.markdown("- " + note)
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown("**Lessons from this game**")
+        with st.container(border=True):
+            for note in review.lessons(data):
+                st.markdown("- " + note)
+    with right:
+        st.markdown("**Your moves by verdict**")
+        order = ["Best", "Good", "Inaccuracy", "Mistake", "Blunder"]
+        st.dataframe(pd.DataFrame({"Verdict": [f"{GRADE_ICONS[g]} {g}" for g in order],
+                                   "Moves": [s["counts"][g] for g in order]}), hide_index=True, width="stretch")
+        st.markdown("**By phase**")
+        st.dataframe(pd.DataFrame([{"Phase": ph, "Moves": v["moves"], "Avg win % lost": v["avg_loss"],
+                                    "Inaccuracies": v["inaccuracies"], "Mistakes + blunders": v["errors"]}
+                                   for ph, v in s["by_phase"].items()]), hide_index=True, width="stretch")
+        st.caption(f"Opening book until move {s['book_plies'] // 2 + 1} · {s['analyzed']} of your moves analyzed")
 
-    st.subheader("Your winning chances")
+    st.markdown("**Your winning chances**")
     chart = pd.DataFrame({"Best available": [m["best_win"] for m in data["moves"]],
                           "After your move": [m["my_win"] for m in data["moves"]]},
                          index=pd.Index([m["move_no"] for m in data["moves"]], name="Move"))
-    st.line_chart(chart, y_label="Win %", x_label="Move", height=260, color=["#81b64c", "#d9a441"])
+    st.line_chart(chart, y_label="Win %", x_label="Move", height=240, color=["#81b64c", "#d9a441"])
     st.caption("The gap between the two lines is what each move gave away.")
 
-    st.subheader("Move by move")
-    walk = review.walkthrough(conn, gid)
-    left, right = st.columns([3, 2])
-    with left:
-        _board_component(puzzle_id=f"walk-{gid}", mode="game", pieces=chess.svg.PIECES, legal=[], accepted=[],
-                         lines=[], played={}, prompt="", key="game_walk", default=None, **walk)
-    with right:
-        st.markdown("**How to read it**\n"
-                    "- **◀ ▶** step through the game (arrow keys work too); **⚠** jumps to your next key moment.\n"
-                    "- Under the board: what each move is for, your verdict, the better move and the plan behind it.\n"
-                    "- A green arrow shows the better move. **Play the better …** walks you down that line.\n"
-                    "- The bar under the board is your winning chances after the move.")
-        st.caption("Explanations are built from engine lines and board features (attacks, pins, files, outposts, "
-                   "pawn breaks), not written by a language model.")
+    # ---- 4. per-move review ----
+    st.header("Per-move review")
+    moves = data["moves"]
+    only_key = st.toggle("Only inaccuracies, mistakes and blunders", key="game_only_key")
+    shown = [m for m in moves if m["grade"] in ("Inaccuracy", "Mistake", "Blunder")] if only_key else moves
+    table = pd.DataFrame({
+        "Move": [m["label"] for m in shown],
+        "Verdict": [f"{GRADE_ICONS[m['grade']]} {m['grade']}" for m in shown],
+        "Win % lost": [m["drop"] for m in shown],
+        "Best": [m["best_san"] for m in shown],
+        "Phase": [m["phase"] for m in shown],
+        "Review": [m["comment"].replace("**", "") for m in shown],
+    })
+    event = st.dataframe(table, hide_index=True, width="stretch", height=min(330, 38 * len(shown) + 40),
+                         on_select="rerun", selection_mode="single-row", key=f"permove_{gid}_{only_key}",
+                         column_config={"Review": st.column_config.TextColumn(width="large")})
+    st.caption("Select a row to put that move on the board below.")
+    rows = event.selection.rows if event and event.selection else []
 
-    with st.expander("Table of key moments"):
-        game_moments(gid)
+    # ---- 5. move by move ----
+    st.header("Move by move")
+    walk = review.walkthrough(conn, gid)
+    if rows and rows[0] < len(shown):
+        walk["start"] = shown[rows[0]]["ply"]
+    st.caption("◀ ▶ or the arrow keys step through the game · ⚠ jumps to your next key moment · the green arrow "
+               "is the better move · \"Play the better …\" walks down that line.")
+    _board_component(puzzle_id=f"walk-{gid}-{walk['start']}", mode="game", pieces=chess.svg.PIECES, legal=[],
+                     accepted=[], lines=[], played={}, prompt="", key="game_walk", default=None, **walk)
+    st.caption("Explanations come from engine lines and board features (attacks, pins, files, outposts, pawn "
+               "breaks), not from a language model.")
 
 
 # =============================================================== Page 4: Calibration
@@ -869,14 +868,14 @@ def page_import() -> None:
 
 PAGES = {
     "import": st.Page(page_import, title="1 · Import & analyze", icon="⬇", default=True),
-    "game": st.Page(page_game, title="Game review", icon="🔍", url_path="game"),
+    "game": st.Page(page_game, title="Individual game review", icon="🔍", url_path="game"),
     "report": st.Page(page_report, title="2 · Leak report", icon="📊", url_path="report"),
     "trainer": st.Page(page_trainer, title="3 · Trainer", icon="♟", url_path="trainer"),
     "quiet": st.Page(page_quiet, title="Find the quiet move", icon="🤫", url_path="quiet"),
     "calibration": st.Page(page_calibration, title="Calibration", icon="🎯", url_path="calibration"),
 }
 st.navigation({"Workflow": [PAGES["import"], PAGES["report"], PAGES["trainer"]],
-               "One game": [PAGES["game"]],
+               "Individual game review": [PAGES["game"]],
                "Extras": [PAGES["quiet"], PAGES["calibration"]]}).run()
 
 st.sidebar.markdown("> *I don't believe in psychology. I believe in good moves.*\n>\n> — Bobby Fischer")

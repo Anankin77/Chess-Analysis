@@ -85,6 +85,14 @@
   body.game #lines { display: none; } body.game #comment, body.game #evalbar { display: block; } body.game #subbtns { display: flex; }
   body.game #moves { max-height: 92px; }
   body:not(.game) #last, body:not(.game) #key { display: none; }
+  @media (min-width: 760px) {                      /* laptop: board left, review right */
+    body.game #wrap { max-width: none; display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr);
+                      column-gap: 20px; align-items: start; }
+    body.game #frame, body.game #evalbar, body.game #status { grid-column: 1; }
+    body.game #reveal { grid-column: 2; grid-row: 1 / span 3; }
+    body.game #moves { max-height: 132px; }
+    body.game #comment { font-size: 16px; }
+  }
   @media (max-width: 420px) {
     #wrap { padding-right: 0; } #frame { padding: 6px; border-radius: 8px; }
     .row .hint { display: none; } .coord { font-size: 8px; }
